@@ -1,0 +1,116 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[project]
+name = "course-selection"
+version = "1.0.0"
+description = "STSS 智能选课子系统（C 组）"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "psycopg[binary,pool]>=3.1",
+    "redis>=5.0",
+    "aio-pika>=9.4",
+    "httpx>=0.27",
+    "apscheduler>=3.10",
+    "sse-starlette>=2.1",
+    "prometheus-client>=0.20",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "testcontainers[postgres,redis,rabbitmq]>=4.0",
+    "ruff>=0.4",
+    "pyrefly>=0.16",
+    "import-linter>=2.0",
+]
+
+[project.scripts]
+course-selection = "app.main:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC", "C4", "SIM"]
+# S101: 允许 assert；UP042: (str, Enum) 是 pydantic 序列化最稳妥的惯用法，不强制 StrEnum
+ignore = ["S101", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+# 仓储层 SQL 仅用静态列名常量做 f-string 拼接，所有值走 %s 参数化绑定，
+# 不存在注入面；S608 在此为误报。
+"app/repositories/**" = ["S608"]
+
+[tool.pyrefly]
+# 静态类型检查用 pyrefly（见《06 代码规范与项目结构》§类型系统）
+project-includes = ["app"]
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: 需要真实 PG/Redis 的集成测试",
+    "e2e: 真实 HTTP 全栈（需 PG/Redis/RabbitMQ）",
+    "load: 压测脚本（手动触发）",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["app/main.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",  # Protocol 体
+]
+
+# 依赖倒置 / 层级契约：由 import-linter 在 CI 强制
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "分层依赖（接入→业务→领域；基础设施在底）"
+type = "layers"
+layers = [
+    "app.api",
+    "app.services",
+    "app.engine",
+    "app.repositories | app.integrations",
+    "app.domain",
+    "app.core",
+]
+# api 是 composition root，允许向下装配；下列契约额外锁死 DIP 关键约束
+
+[[tool.importlinter.contracts]]
+name = "DIP：services 不得依赖具体实现（只能经 domain.ports）"
+type = "forbidden"
+source_modules = ["app.services"]
+forbidden_modules = ["app.repositories", "app.integrations"]
+
+[[tool.importlinter.contracts]]
+name = "domain 纯净：不依赖任何上层或基础设施"
+type = "forbidden"
+source_modules = ["app.domain"]
+forbidden_modules = [
+    "app.api", "app.services", "app.engine",
+    "app.repositories", "app.integrations", "app.core",
+]

@@ -1,0 +1,54 @@
+# 本组对外测试栈。生产由全系统统一编排，rabbitmq 共用。
+services:
+  course-selection-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      MODE: api
+    env_file: ../.env
+    ports:
+      - "8003:8003"
+    depends_on:
+      - course-selection-pg
+      - course-selection-redis
+      - rabbitmq
+
+  course-selection-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      MODE: worker
+    env_file: ../.env
+    depends_on:
+      - course-selection-pg
+      - course-selection-redis
+      - rabbitmq
+
+  course-selection-pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cs_user
+      POSTGRES_PASSWORD: cs_pwd
+      POSTGRES_DB: course_selection
+    volumes:
+      - ../migrations:/docker-entrypoint-initdb.d:ro
+      - cs_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  course-selection-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  cs_pg_data:
