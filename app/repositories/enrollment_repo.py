@@ -65,8 +65,16 @@ class PgEnrollmentRepository:
     async def insert(self, conn: AsyncConnection, e: Enrollment) -> str | None:
         cur = await conn.execute(
             SQL_INSERT,
-            (e.enrollment_id, e.student_id, e.offering_id, e.semester,
-             e.status.value, e.stage.value, e.source.value, e.idempotency_key),
+            (
+                e.enrollment_id,
+                e.student_id,
+                e.offering_id,
+                e.semester,
+                e.status.value,
+                e.stage.value,
+                e.source.value,
+                e.idempotency_key,
+            ),
         )
         row = await cur.fetchone()
         return row[0] if row else None

@@ -57,9 +57,11 @@ async def test_study_plan_save_validate_and_get(client) -> None:  # type: ignore
         "/api/course-selection/v1/study-plans/me",
         headers=_STUDENT,
         json={
-            "major_code": "CS", "curriculum_version": "2023",
-            "items": [{"course_code": "CS101", "category": "major_required",
-                       "expected_semester": "2026-1", "credit": 3}],
+            "major_code": "CS",
+            "curriculum_version": "2023",
+            "items": [
+                {"course_code": "CS101", "category": "major_required", "expected_semester": "2026-1", "credit": 3}
+            ],
         },
     )
     assert too_few.status_code == 422
@@ -70,7 +72,8 @@ async def test_study_plan_save_validate_and_get(client) -> None:  # type: ignore
         "/api/course-selection/v1/study-plans/me",
         headers=_STUDENT,
         json={
-            "major_code": "CS", "curriculum_version": "2023",
+            "major_code": "CS",
+            "curriculum_version": "2023",
             "items": [
                 {"course_code": "CS101", "category": "major_required", "expected_semester": "2026-1", "credit": 5},
                 {"course_code": "CS102", "category": "major_required", "expected_semester": "2026-1", "credit": 5},
@@ -102,9 +105,7 @@ async def test_enroll_enters_waiting_room(client) -> None:  # type: ignore[no-un
 
 @pytest.mark.asyncio
 async def test_rbac_student_cannot_read_roster(client) -> None:  # type: ignore[no-untyped-def]
-    resp = await client.get(
-        "/api/course-selection/v1/offerings/B-CS101-2026-1-01/roster", headers=_STUDENT
-    )
+    resp = await client.get("/api/course-selection/v1/offerings/B-CS101-2026-1-01/roster", headers=_STUDENT)
     assert resp.status_code == 403
     assert resp.json()["code"] == 30003
 

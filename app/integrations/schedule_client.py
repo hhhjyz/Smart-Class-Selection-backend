@@ -1,4 +1,16 @@
-"""B 组排课服务客户端，实现 ports.ScheduleServiceClient。"""
+"""B 组排课服务（zjuse-schedule）客户端，实现 ports.ScheduleServiceClient。
+
+已核对 B 组仓库真实契约（app/api/v1/schedule.py、classrooms.py、schemas/*）：
+- 前缀 `/api/v1`；响应壳 `{code, msg, data}`（code=0 成功）；
+- 鉴权走网关头 `X-User-Id` / `X-User-Role`（角色大写）；
+- `GET /schedule/entries?semester=&teacher_id=&course_id=` → `ScheduleEntryOut[]`
+  （B 组注释：下游智能选课组由此拉取课表数据）；
+- `GET /classrooms?skip=&limit=` → `ClassroomOut[]`，用 classroom_id 解析教室名/校区。
+
+一条 ScheduleEntry = 一门课的一个时段；同一 course_id 的多条聚合为一个本地 Offering，
+其多个时段并入 time_slots。课名/教师名属 A 组目录，未接入前以 course_id 占位、教师名留空，
+不依赖未核实的接口（与 RosterStudent.name 留空同一约定）。
+"""
 
 from __future__ import annotations
 
@@ -12,16 +24,21 @@ from app.core.config import get_settings
 from app.core.http import CircuitBreaker, get_http
 from app.domain.offering import Offering, TimeSlot
 
+# B 组 WeekParity 枚举 → 周次展示后缀
+_PARITY_SUFFIX = {"ALL": "周", "ODD": "周(单)", "EVEN": "周(双)"}
 
-def _to_offering(d: dict[str, Any]) -> Offering:  # 外部 JSON 边界，Any 收敛于此
-    slots = tuple(
-        TimeSlot(day=s["day"], period=tuple(s["period"]), weeks=s["weeks"])
-        for s in d.get("time_slots", [])
-    )
-    return Offering(
-        offering_id=d["offering_id"], course_code=d["course_code"], course_name=d["course_name"],
-        teacher_id=d["teacher_id"], teacher_name=d["teacher_name"], semester=d["semester"],
-        time_slots=slots, classroom=d.get("classroom"), campus=d.get("campus"),
+
+def _weeks_str(week_start: int, week_end: int, parity: str) -> str:
+    """week_start/week_end + parity(ALL/ODD/EVEN) → 展示字符串，如 "1-16周"、"1-15周(单)"。"""
+    return f"{week_start}-{week_end}{_PARITY_SUFFIX.get(parity, '周')}"
+
+
+def _to_timeslot(entry: dict[str, Any]) -> TimeSlot:
+    start, end = int(entry["slot_start"]), int(entry["slot_end"])
+    return TimeSlot(
+        day=int(entry["day_of_week"]),
+        period=tuple(range(start, end + 1)),
+        weeks=_weeks_str(int(entry["week_start"]), int(entry["week_end"]), str(entry.get("week_parity", "ALL"))),
     )
 
 
@@ -32,38 +49,67 @@ class HttpScheduleServiceClient:
         self._base = self._settings.schedule_service_base_url.rstrip("/")
         self._timeout = self._settings.schedule_service_timeout_ms / 1000
 
-    async def list_offerings(self, semester: str, page: int, page_size: int) -> Sequence[Offering]:
-        data = await self._get(
-            "/api/schedule/v1/offerings", params={"semester": semester, "page": page, "page_size": page_size}
-        )
-        return [_to_offering(o) for o in data.get("list", [])]
+    async def list_offerings(self, semester: str) -> Sequence[Offering]:
+        entries = await self._get_list(self._settings.schedule_entries_path, params={"semester": semester})
+        rooms = await self._load_classrooms()
+        # 按 course_id 聚合多条排课条目为一个开课
+        by_course: dict[str, list[dict[str, Any]]] = {}
+        for e in entries:
+            by_course.setdefault(str(e["course_id"]), []).append(e)
+        offerings: list[Offering] = []
+        for course_id, group in by_course.items():
+            first = group[0]
+            teacher_ids = [str(t) for t in first.get("teacher_ids", [])]
+            room = rooms.get(int(first["classroom_id"]), {})
+            offerings.append(
+                Offering(
+                    offering_id=f"{course_id}-{semester}",
+                    course_code=course_id,  # A 组课程目录待接入，暂以 course_id 占位
+                    course_name=course_id,
+                    teacher_id=teacher_ids[0] if teacher_ids else "",
+                    teacher_name="",  # A 组身份目录待接入
+                    semester=semester,
+                    time_slots=tuple(_to_timeslot(e) for e in group),
+                    classroom=room.get("name"),
+                    campus=room.get("campus"),
+                )
+            )
+        return offerings
 
-    async def get_offering(self, offering_id: str) -> Offering | None:
-        try:
-            data = await self._get(f"/api/schedule/v1/offerings/{offering_id}")
-        except errors.NotFound:
-            return None
-        return _to_offering(data) if data else None
+    async def _load_classrooms(self) -> dict[int, dict[str, Any]]:
+        rows = await self._get_list(self._settings.schedule_classrooms_path, params={"skip": 0, "limit": 1000})
+        return {int(r["id"]): r for r in rows}
 
-    async def _get(self, path: str, params: dict[str, str | int] | None = None) -> dict[str, Any]:
+    def _headers(self) -> dict[str, str]:
+        # B 组 get_current_user 要求网关头存在；服务间调用透传服务身份。
+        return {
+            "X-User-Id": self._settings.schedule_service_user_id,
+            "X-User-Role": self._settings.schedule_service_role,
+        }
+
+    async def _get_list(self, path: str, params: dict[str, str | int] | None = None) -> list[dict[str, Any]]:
+        data = await self._get(path, params=params)
+        return data if isinstance(data, list) else []
+
+    async def _get(self, path: str, params: dict[str, str | int] | None = None) -> Any:
         if self._breaker.is_open:
-            raise errors.UpstreamDown("B 服务熔断中")
+            raise errors.UpstreamDown("B 排课服务熔断中")
         client = get_http()
         last_exc: Exception | None = None
         for _ in range(self._settings.upstream_max_retries + 1):
             try:
-                resp = await client.get(f"{self._base}{path}", params=params, timeout=self._timeout)
-                if resp.status_code == 404:
-                    raise errors.NotFound("B 服务资源不存在")
+                resp = await client.get(
+                    f"{self._base}{path}", params=params, headers=self._headers(), timeout=self._timeout
+                )
                 resp.raise_for_status()
                 self._breaker.record_success()
-                data: dict[str, Any] = resp.json().get("data", {})
-                return data
-            except errors.NotFound:
-                raise
+                body = resp.json()
+                if body.get("code", 0) != 0:
+                    raise errors.UpstreamDown(f"B 排课服务业务错误 code={body.get('code')}")
+                return body.get("data")
             except (httpx.HTTPStatusError, httpx.TransportError) as exc:
                 last_exc = exc
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
-                    raise errors.UpstreamDown("B 服务返回错误") from exc
+                    raise errors.UpstreamDown("B 排课服务返回错误") from exc
         self._breaker.record_failure()
-        raise errors.UpstreamDown("B 服务不可用") from last_exc
+        raise errors.UpstreamDown("B 排课服务不可用") from last_exc

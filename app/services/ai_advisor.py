@@ -86,15 +86,21 @@ class AIAdvisor:
         for offering_id in offering_ids:
             try:
                 outcome = await self._enroll.enroll(
-                    principal, student_id=principal.user_id,
-                    offering_id=offering_id, stage=Stage.ADD_DROP,
+                    principal,
+                    student_id=principal.user_id,
+                    offering_id=offering_id,
+                    stage=Stage.ADD_DROP,
                 )
                 results.append({"offering_id": offering_id, "status": outcome.status.value})
             except errors.DomainError as exc:
-                results.append({
-                    "offering_id": offering_id, "status": "rejected",
-                    "reason": exc.message, "code": exc.code,
-                })
+                results.append(
+                    {
+                        "offering_id": offering_id,
+                        "status": "rejected",
+                        "reason": exc.message,
+                        "code": exc.code,
+                    }
+                )
 
         import json
 
@@ -107,8 +113,11 @@ class AIAdvisor:
             await self._audit.write(
                 conn,
                 AuditEntry(
-                    actor_id=principal.user_id, actor_role=principal.role.value,
-                    action="ai.guardrail.violated", target_type="ai_tool", target_id=tool_name,
+                    actor_id=principal.user_id,
+                    actor_role=principal.role.value,
+                    action="ai.guardrail.violated",
+                    target_type="ai_tool",
+                    target_id=tool_name,
                 ),
             )
         logger.warning("AI 工具越界：%s", tool_name, extra={"event": "ai.guardrail.violated"})

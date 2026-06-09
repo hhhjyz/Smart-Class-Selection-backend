@@ -10,7 +10,6 @@ import pytest
 from app.core import errors
 from app.core.auth import Principal, Role
 from app.domain.enums import EnrollmentSource, EnrollmentStatus, PlanStatus, RuleType, Stage
-from app.domain.offering import GradeRecord
 from app.domain.study_plan import CurriculumRule, StudyPlan
 from app.services.enrollment_service import EnrollmentService
 from app.services.rule_engine import RuleEngine
@@ -21,28 +20,37 @@ _ADMIN = Principal(user_id="A-1", role=Role.ADMIN)
 _OID = "B-CS101-2026-1-01"
 
 
-def _build(*, admitted=True, stock=1, max_capacity=50, enrolled=0, grades=(), rules=(), timetable=()):  # type: ignore[no-untyped-def]
+def _build(*, admitted=True, stock=1, max_capacity=50, enrolled=0, rules=(), timetable=()):  # type: ignore[no-untyped-def]
     enr = fakes.FakeEnrollmentRepository()
     cap = fakes.FakeCapacityRepository({_OID: fakes.make_capacity(_OID, max_capacity, enrolled)})
     off = fakes.FakeOfferingCacheRepository({_OID: fakes.make_offering(_OID)}, timetable=timetable)
     # 学生须有培养方案，service 才会加载并应用 curriculum_rules
     student_plan = StudyPlan(
-        plan_id="P-1", student_id="S-1", major_code="CS", curriculum_version="2023",
-        total_credit_required=160, status=PlanStatus.VALID,
+        plan_id="P-1",
+        student_id="S-1",
+        major_code="CS",
+        curriculum_version="2023",
+        total_credit_required=160,
+        status=PlanStatus.VALID,
     )
     plan = fakes.FakeStudyPlanRepository(plans={"S-1": student_plan}, rules=rules)
     audit = fakes.FakeAuditRepository()
     outbox = fakes.FakeOutboxRepository()
     stock_store = fakes.FakeStockStore({_OID: stock})
     room = fakes.FakeWaitingRoom(admitted=admitted)
-    info = fakes.FakeInfoServiceClient(grades=grades)
     svc = EnrollmentService(
-        enrollment_repo=enr, capacity_repo=cap, offering_repo=off, study_plan_repo=plan,
-        audit_repo=audit, outbox_repo=outbox, stock=stock_store, waiting_room=room,
-        info_client=info, rule_engine=RuleEngine(),
+        enrollment_repo=enr,
+        capacity_repo=cap,
+        offering_repo=off,
+        study_plan_repo=plan,
+        audit_repo=audit,
+        outbox_repo=outbox,
+        stock=stock_store,
+        waiting_room=room,
+        info_client=fakes.FakeInfoServiceClient(),
+        rule_engine=RuleEngine(),
     )
-    deps = {"enr": enr, "cap": cap, "off": off, "audit": audit,
-            "outbox": outbox, "stock": stock_store, "room": room}
+    deps = {"enr": enr, "cap": cap, "off": off, "audit": audit, "outbox": outbox, "stock": stock_store, "room": room}
     return svc, deps
 
 
@@ -82,29 +90,22 @@ async def test_enroll_capacity_full_stock_zero() -> None:
 
 @pytest.mark.asyncio
 async def test_enroll_rule_rejected_hard_violation() -> None:
-    # 前置课规则缺失 → 硬违例
+    # 互斥规则命中 → 硬违例（不依赖成绩数据源）
     rule = CurriculumRule(
-        rule_id="r1", major_code="CS", curriculum_version="2023", rule_type=RuleType.PREREQUISITE,
-        payload={"subject_key": "CS101", "requires": ["DS201"]},
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.EXCLUSIVE,
+        payload={"group": ["CS101", "CS101H"]},
     )
-    svc, dep = _build(admitted=True, stock=1, rules=[rule], grades=[])
+    # 已选互斥课 CS101H
+    timetable = [fakes.make_offering("B-CS101H", "CS101H")]
+    svc, dep = _build(admitted=True, stock=1, rules=[rule], timetable=timetable)
     with pytest.raises(errors.RuleRejected) as ei:
         await svc.enroll(_STUDENT, student_id="S-1", offering_id=_OID, stage=Stage.ADD_DROP)
     assert ei.value.data["violations"]  # type: ignore[index]
     # 规则在扣库存前拒绝，库存不动
     assert dep["stock"].stock[_OID] == 1
-
-
-@pytest.mark.asyncio
-async def test_enroll_prerequisite_satisfied_passes() -> None:
-    rule = CurriculumRule(
-        rule_id="r1", major_code="CS", curriculum_version="2023", rule_type=RuleType.PREREQUISITE,
-        payload={"subject_key": "CS101", "requires": ["DS201"]},
-    )
-    grades = [GradeRecord(course_code="DS201", credit=3, passed=True)]
-    svc, _ = _build(admitted=True, stock=1, rules=[rule], grades=grades)
-    out = await svc.enroll(_STUDENT, student_id="S-1", offering_id=_OID, stage=Stage.ADD_DROP)
-    assert out.status is EnrollmentStatus.ENROLLED
 
 
 @pytest.mark.asyncio
@@ -140,8 +141,12 @@ async def test_enroll_idempotency_short_circuit() -> None:
 async def test_admin_proxy_skips_waiting_room() -> None:
     svc, dep = _build(admitted=False, stock=1)  # 未放行也应通过（代选不过等待室）
     out = await svc.enroll(
-        _ADMIN, student_id="S-1", offering_id=_OID, stage=Stage.ADD_DROP,
-        source=EnrollmentSource.ADMIN_PROXY, allow_override=True,
+        _ADMIN,
+        student_id="S-1",
+        offering_id=_OID,
+        stage=Stage.ADD_DROP,
+        source=EnrollmentSource.ADMIN_PROXY,
+        allow_override=True,
     )
     assert out.status is EnrollmentStatus.ENROLLED
     assert dep["room"].enqueued == []
@@ -199,10 +204,10 @@ async def test_list_my_enrollments() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_roster_enriches_names() -> None:
+async def test_get_roster_enriches_names_from_a_team() -> None:
     svc, _ = _build(admitted=True, stock=1)
     await svc.enroll(_STUDENT, student_id="S-1", offering_id=_OID, stage=Stage.ADD_DROP)
     offering, students = await svc.get_roster(_OID, include_dropped=False)
     assert offering is not None
-    # fake info client 返回固定姓名
-    assert students == [] or students[0][1] == "测试同学"
+    # 姓名经 A 组 GET /api/v1/users/{id} 补全（fake 返回固定姓名）
+    assert students[0][0] == "S-1" and students[0][1] == "测试同学"

@@ -20,23 +20,63 @@ _OID = "B-CS101-2026-1-01"
 # ---------------- 管理员（无需上游） ----------------
 @pytest.mark.asyncio
 async def test_admin_throttle_and_capacity(client) -> None:  # type: ignore[no-untyped-def]
-    r1 = await client.post("/api/course-selection/v1/admin/throttle", headers=_ADMIN,
-                           json={"capacity_per_tick": 80})
+    r1 = await client.post("/api/course-selection/v1/admin/throttle", headers=_ADMIN, json={"capacity_per_tick": 80})
     assert r1.status_code == 200 and r1.json()["data"]["waitroom_cap_per_tick"] == 80
 
-    r2 = await client.post(f"/api/course-selection/v1/admin/capacity/{_OID}", headers=_ADMIN,
-                           json={"delta": 5, "reason": "加名额"})
+    r2 = await client.post(
+        f"/api/course-selection/v1/admin/capacity/{_OID}", headers=_ADMIN, json={"delta": 5, "reason": "加名额"}
+    )
     assert r2.status_code == 200 and r2.json()["data"]["max_capacity"] >= 5
 
 
 @pytest.mark.asyncio
 async def test_admin_lottery_run_e2e(client) -> None:  # type: ignore[no-untyped-def]
-    r = await client.post("/api/course-selection/v1/admin/lottery/runs",
-                          headers=_ADMIN, params={"semester": "2099-E2E"})
+    r = await client.post(
+        "/api/course-selection/v1/admin/lottery/runs", headers=_ADMIN, json={"semester": "2099-E2E", "seed": 7}
+    )
     assert r.status_code == 200
     run_id = r.json()["data"]["run_id"]
     got = await client.get(f"/api/course-selection/v1/admin/lottery/runs/{run_id}", headers=_ADMIN)
     assert got.status_code == 200 and got.json()["data"]["run_id"] == run_id
+
+
+@pytest.mark.asyncio
+async def test_admin_windows_upsert_and_list(client) -> None:  # type: ignore[no-untyped-def]
+    body = {
+        "semester": "2099-E2E",
+        "stage": "add_drop",
+        "start_at": "2099-01-01T00:00:00+08:00",
+        "end_at": "2099-01-08T00:00:00+08:00",
+    }
+    w = await client.post("/api/course-selection/v1/admin/windows", headers=_ADMIN, json=body)
+    assert w.status_code == 200 and w.json()["data"]["stage"] == "add_drop"
+    lst = await client.get("/api/course-selection/v1/admin/windows", headers=_ADMIN, params={"semester": "2099-E2E"})
+    assert lst.status_code == 200
+    rows = lst.json()["data"]["list"]
+    assert any(r["semester"] == "2099-E2E" and r["stage"] == "add_drop" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_admin_dashboard(client) -> None:  # type: ignore[no-untyped-def]
+    r = await client.get("/api/course-selection/v1/admin/dashboard", headers=_ADMIN)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert set(data) >= {"online_count", "offerings_remaining", "rule_violations_dist"}
+    assert isinstance(data["offerings_remaining"], list)
+
+
+@pytest.mark.asyncio
+async def test_teacher_offerings_and_conflicts(client) -> None:  # type: ignore[no-untyped-def]
+    teacher = {"X-User-ID": "T-9001", "X-User-Role": "teacher", "X-Request-ID": "e2e-tch"}
+    off = await client.get(
+        "/api/course-selection/v1/teaching/offerings", headers=teacher, params={"semester": "2026-1"}
+    )
+    assert off.status_code == 200
+    assert any(o["offering_id"] == _OID for o in off.json()["data"]["list"])
+
+    # 时间冲突预检：无已选课程 → 不冲突
+    conf = await client.get(f"/api/course-selection/v1/offerings/{_OID}/conflicts", headers=_STUDENT)
+    assert conf.status_code == 200 and conf.json()["data"]["has_conflict"] is False
 
 
 @pytest.mark.asyncio
@@ -70,27 +110,34 @@ async def test_enroll_success_via_http(app_client) -> None:  # type: ignore[no-u
     await stock.reset(_OID, 100)  # 预置热路径库存
 
     svc = EnrollmentService(
-        enrollment_repo=PgEnrollmentRepository(), capacity_repo=PgCapacityRepository(),
-        offering_repo=PgOfferingCacheRepository(), study_plan_repo=PgStudyPlanRepository(),
-        audit_repo=PgAuditRepository(), outbox_repo=PgOutboxRepository(),
-        stock=stock, waiting_room=fakes.FakeWaitingRoom(admitted=True),
-        info_client=fakes.FakeInfoServiceClient(), rule_engine=RuleEngine(),
+        enrollment_repo=PgEnrollmentRepository(),
+        capacity_repo=PgCapacityRepository(),
+        offering_repo=PgOfferingCacheRepository(),
+        study_plan_repo=PgStudyPlanRepository(),
+        audit_repo=PgAuditRepository(),
+        outbox_repo=PgOutboxRepository(),
+        stock=stock,
+        waiting_room=fakes.FakeWaitingRoom(admitted=True),
+        info_client=fakes.FakeInfoServiceClient(),
+        rule_engine=RuleEngine(),
     )
     app.dependency_overrides[get_enrollment_service] = lambda: svc
 
     student = f"S-{uuid.uuid4().hex[:6]}"
     headers = {"X-User-ID": student, "X-User-Role": "student", "X-Request-ID": "e2e-enr"}
     try:
-        r = await client.post("/api/course-selection/v1/enrollments", headers=headers,
-                              json={"offering_id": _OID, "stage": "add_drop"})
+        r = await client.post(
+            "/api/course-selection/v1/enrollments", headers=headers, json={"offering_id": _OID, "stage": "add_drop"}
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["code"] == 0 and body["data"]["status"] == "enrolled"
         eid = body["data"]["enrollment_id"]
 
         # 列表能看到
-        lst = await client.get("/api/course-selection/v1/enrollments/me",
-                               headers=headers, params={"semester": "2026-1"})
+        lst = await client.get(
+            "/api/course-selection/v1/enrollments/me", headers=headers, params={"semester": "2026-1"}
+        )
         assert any(e["enrollment_id"] == eid for e in lst.json()["data"]["list"])
 
         # 退课幂等

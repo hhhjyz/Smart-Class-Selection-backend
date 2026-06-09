@@ -15,6 +15,7 @@ from typing import Annotated
 from fastapi import Depends, Header
 
 from app.core.auth import Principal, principal_from_headers
+from app.core.config import get_settings
 from app.core.redis import get_redis
 from app.engine.capacity_lock import RedisStockStore
 from app.engine.waiting_room import RedisWaitingRoom
@@ -33,13 +34,29 @@ from app.services.reconciler import Reconciler
 from app.services.rule_engine import RuleEngine
 from app.services.study_plan_service import StudyPlanService
 
+# 仅开发：无网关直连时，token → 身份（生产由网关注入 X-User-Id，dev_auth_from_token=False）
+_DEV_TOKEN_IDENTITY: dict[str, tuple[str, str]] = {
+    "token-student": ("S-3210123", "student"),
+    "token-teacher": ("T-9001", "teacher"),
+    "token-academic-admin": ("A-1", "admin"),
+}
+
 
 # --- 请求态：从网关 header 解析当前身份 ---
+# 网关（STSS-gateway）注入 X-User-Id / X-User-Role / X-User-Permissions（见 core/auth.py）。
 async def get_principal(
-    x_user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
+    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
     x_user_role: Annotated[str | None, Header(alias="X-User-Role")] = None,
+    x_user_permissions: Annotated[str | None, Header(alias="X-User-Permissions")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    x_access_token: Annotated[str | None, Header(alias="x-access-token")] = None,
 ) -> Principal:
-    return principal_from_headers(x_user_id, x_user_role)
+    if not x_user_id and get_settings().dev_auth_from_token:
+        token = x_access_token or (authorization or "").removeprefix("Bearer ").strip()
+        mapped = _DEV_TOKEN_IDENTITY.get(token)
+        if mapped:
+            x_user_id, x_user_role = mapped
+    return principal_from_headers(x_user_id, x_user_role, x_user_permissions)
 
 
 CurrentUser = Annotated[Principal, Depends(get_principal)]
@@ -65,7 +82,7 @@ def _build_enrollment_service() -> EnrollmentService:
 
 @lru_cache(maxsize=1)
 def _build_study_plan_service() -> StudyPlanService:
-    return StudyPlanService(study_plan_repo=PgStudyPlanRepository())
+    return StudyPlanService(study_plan_repo=PgStudyPlanRepository(), info_client=HttpInfoServiceClient())
 
 
 @lru_cache(maxsize=1)

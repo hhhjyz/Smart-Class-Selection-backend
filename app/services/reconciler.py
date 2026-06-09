@@ -19,9 +19,7 @@ _ALERT_THRESHOLD = 5
 
 
 class Reconciler:
-    def __init__(
-        self, *, capacity_repo: CapacityRepository, audit_repo: AuditRepository, stock: StockStore
-    ) -> None:
+    def __init__(self, *, capacity_repo: CapacityRepository, audit_repo: AuditRepository, stock: StockStore) -> None:
         self._capacity = capacity_repo
         self._audit = audit_repo
         self._stock = stock
@@ -41,9 +39,13 @@ class Reconciler:
                     await self._audit.write(
                         conn,
                         AuditEntry(
-                            actor_id="system", actor_role="system", action="reconcile.fix",
-                            target_type="offering", target_id=cap.offering_id,
-                            before={"redis": redis_remaining}, after={"db": expected},
+                            actor_id="system",
+                            actor_role="system",
+                            action="reconcile.fix",
+                            target_type="offering",
+                            target_id=cap.offering_id,
+                            before={"redis": redis_remaining},
+                            after={"db": expected},
                         ),
                     )
                     await self._capacity.mark_reconciled(conn, cap.offering_id)

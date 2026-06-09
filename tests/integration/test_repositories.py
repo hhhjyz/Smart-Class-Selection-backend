@@ -23,9 +23,14 @@ pytestmark = pytest.mark.integration
 
 def _enrollment(student="S-r1", offering="RP-CS1", key=None) -> Enrollment:  # type: ignore[no-untyped-def]
     return Enrollment(
-        enrollment_id=str(uuid.uuid4()), student_id=student, offering_id=offering,
-        semester="2026-1", status=EnrollmentStatus.ENROLLED, stage=Stage.ADD_DROP,
-        source=EnrollmentSource.STUDENT_SELF, idempotency_key=key,
+        enrollment_id=str(uuid.uuid4()),
+        student_id=student,
+        offering_id=offering,
+        semester="2026-1",
+        status=EnrollmentStatus.ENROLLED,
+        stage=Stage.ADD_DROP,
+        source=EnrollmentSource.STUDENT_SELF,
+        idempotency_key=key,
     )
 
 
@@ -54,10 +59,21 @@ async def test_enrollment_repo_crud_and_idempotency(pg_pool) -> None:  # type: i
 async def test_study_plan_repo_roundtrip(pg_pool) -> None:  # type: ignore[no-untyped-def]
     repo = PgStudyPlanRepository()
     plan = StudyPlan(
-        plan_id=str(uuid.uuid4()), student_id="S-plan", major_code="CS", curriculum_version="2099",
-        total_credit_required=10, status=PlanStatus.VALID,
-        items=(StudyPlanItem(plan_item_id=str(uuid.uuid4()), course_code="CS101",
-                             category=ItemCategory.MAJOR_REQUIRED, expected_semester="2026-1", credit=5),),
+        plan_id=str(uuid.uuid4()),
+        student_id="S-plan",
+        major_code="CS",
+        curriculum_version="2099",
+        total_credit_required=10,
+        status=PlanStatus.VALID,
+        items=(
+            StudyPlanItem(
+                plan_item_id=str(uuid.uuid4()),
+                course_code="CS101",
+                category=ItemCategory.MAJOR_REQUIRED,
+                expected_semester="2026-1",
+                credit=5,
+            ),
+        ),
     )
     async with pg_pool.connection() as conn, conn.transaction():
         await repo.upsert(conn, plan)
@@ -71,9 +87,15 @@ async def test_study_plan_repo_roundtrip(pg_pool) -> None:  # type: ignore[no-un
 async def test_offering_cache_repo_search(pg_pool) -> None:  # type: ignore[no-untyped-def]
     repo = PgOfferingCacheRepository()
     off = Offering(
-        offering_id="RP-OFF-1", course_code="ML999", course_name="机器学习", teacher_id="T-1",
-        teacher_name="王老师", semester="2099-1",
-        time_slots=(TimeSlot(day=2, period=(3, 4), weeks="1-16"),), classroom="3-301", campus="紫金港",
+        offering_id="RP-OFF-1",
+        course_code="ML999",
+        course_name="机器学习",
+        teacher_id="T-1",
+        teacher_name="王老师",
+        semester="2099-1",
+        time_slots=(TimeSlot(day=2, period=(3, 4), weeks="1-16"),),
+        classroom="3-301",
+        campus="紫金港",
     )
     async with pg_pool.connection() as conn, conn.transaction():
         assert await repo.upsert_many(conn, [off]) == 1
@@ -81,8 +103,13 @@ async def test_offering_cache_repo_search(pg_pool) -> None:  # type: ignore[no-u
         got = await repo.get(conn, "RP-OFF-1")
         assert got is not None and got.time_slots[0].day == 2
         items, total = await repo.search(
-            conn, keyword="机器学习", teacher_name=None, semester="2099-1",
-            category=None, limit=10, offset=0,
+            conn,
+            keyword="机器学习",
+            teacher_name=None,
+            semester="2099-1",
+            category=None,
+            limit=10,
+            offset=0,
         )
         assert total >= 1 and any(o.course_code == "ML999" for o in items)
 
@@ -92,10 +119,15 @@ async def test_outbox_repo_emit_and_publish(pg_pool) -> None:  # type: ignore[no
     repo = PgOutboxRepository()
     async with pg_pool.connection() as conn, conn.transaction():
         await conn.execute("TRUNCATE course_selection.outbox_events")  # 隔离其它用例残留
-        await repo.emit(conn, OutboxEvent(
-            aggregate_type="enrollment", aggregate_id="x", event_type="enrollment.created",
-            payload={"a": 1},
-        ))
+        await repo.emit(
+            conn,
+            OutboxEvent(
+                aggregate_type="enrollment",
+                aggregate_id="x",
+                event_type="enrollment.created",
+                payload={"a": 1},
+            ),
+        )
     async with pg_pool.connection() as conn, conn.transaction():
         pending = await repo.fetch_pending(conn, 10)
         assert pending
@@ -108,9 +140,16 @@ async def test_outbox_repo_emit_and_publish(pg_pool) -> None:  # type: ignore[no
 async def test_audit_log_is_immutable(pg_pool) -> None:  # type: ignore[no-untyped-def]
     repo = PgAuditRepository()
     async with pg_pool.connection() as conn, conn.transaction():
-        await repo.write(conn, AuditEntry(
-            actor_id="A", actor_role="admin", action="t.test", target_type="x", target_id="1",
-        ))
+        await repo.write(
+            conn,
+            AuditEntry(
+                actor_id="A",
+                actor_role="admin",
+                action="t.test",
+                target_type="x",
+                target_id="1",
+            ),
+        )
     # UPDATE / DELETE 必须被 trigger 拦截
     async with pg_pool.connection() as conn:
         with pytest.raises(psycopg.errors.RaiseException):

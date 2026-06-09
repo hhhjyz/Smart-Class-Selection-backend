@@ -68,22 +68,37 @@ class PgStudyPlanRepository:
         items_cur = await conn.execute(SQL_GET_ITEMS, (plan_id,))
         items = tuple(
             StudyPlanItem(
-                plan_item_id=r[0], course_code=r[1], category=ItemCategory(r[2]),
-                expected_semester=r[3], credit=r[4],
+                plan_item_id=r[0],
+                course_code=r[1],
+                category=ItemCategory(r[2]),
+                expected_semester=r[3],
+                credit=r[4],
             )
             for r in await items_cur.fetchall()
         )
         return StudyPlan(
-            plan_id=plan_id, student_id=row[1], major_code=row[2],
-            curriculum_version=row[3], total_credit_required=row[4],
-            status=PlanStatus(row[5]), validated_at=row[6], items=items,
+            plan_id=plan_id,
+            student_id=row[1],
+            major_code=row[2],
+            curriculum_version=row[3],
+            total_credit_required=row[4],
+            status=PlanStatus(row[5]),
+            validated_at=row[6],
+            items=items,
         )
 
     async def upsert(self, conn: AsyncConnection, plan: StudyPlan) -> StudyPlan:
         cur = await conn.execute(
             SQL_UPSERT_PLAN,
-            (plan.plan_id, plan.student_id, plan.major_code, plan.curriculum_version,
-             plan.total_credit_required, plan.status.value, plan.validated_at),
+            (
+                plan.plan_id,
+                plan.student_id,
+                plan.major_code,
+                plan.curriculum_version,
+                plan.total_credit_required,
+                plan.status.value,
+                plan.validated_at,
+            ),
         )
         row = await cur.fetchone()
         plan_id = row[0] if row else plan.plan_id
@@ -92,8 +107,7 @@ class PgStudyPlanRepository:
         for it in plan.items:
             await conn.execute(
                 SQL_INSERT_ITEM,
-                (it.plan_item_id, plan_id, it.course_code, it.category.value,
-                 it.expected_semester, it.credit),
+                (it.plan_item_id, plan_id, it.course_code, it.category.value, it.expected_semester, it.credit),
             )
         return plan.model_copy(update={"plan_id": plan_id})
 
@@ -108,7 +122,9 @@ class PgStudyPlanRepository:
         rows = await cur.fetchall()
         return [
             CurriculumRule(
-                rule_id=r[0], major_code=r[1], curriculum_version=r[2],
+                rule_id=r[0],
+                major_code=r[1],
+                curriculum_version=r[2],
                 rule_type=RuleType(r[3]),
                 payload=r[4] if isinstance(r[4], dict) else json.loads(r[4]),
                 priority=r[5],

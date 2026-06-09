@@ -65,7 +65,8 @@ class RosterStudent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     student_id: str
-    name: str
+    # 姓名属 A 组数据，A 组未发布身份查询端点，故暂为空（不依赖不存在的接口）
+    name: str = ""
     enrolled_at: datetime | None = None
 
 
@@ -101,3 +102,19 @@ class ThrottleRequest(BaseModel):
     tick_interval_ms: int | None = Field(default=None, ge=10)
     capacity_per_tick: int | None = Field(default=None, ge=1)
     per_user_rps: int | None = Field(default=None, ge=1)
+
+
+class WindowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    semester: str
+    stage: Stage
+    start_at: str
+    end_at: str
+
+
+class LotteryRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    semester: str
+    seed: int | None = None

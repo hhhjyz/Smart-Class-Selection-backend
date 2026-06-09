@@ -78,7 +78,7 @@ def test_circuit_breaker_opens_and_resets() -> None:
     cb.record_failure()
     assert cb.is_open is False  # 未达阈值
     cb.record_failure()
-    assert cb.is_open is True   # 第 3 次触发熔断
+    assert cb.is_open is True  # 第 3 次触发熔断
     cb.record_success()
     assert cb.is_open is False  # 成功后复位
 

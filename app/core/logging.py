@@ -39,9 +39,7 @@ def setup_logging() -> None:
     settings = get_settings()
     handler = RichHandler(rich_tracebacks=True, show_path=False)
     handler.addFilter(_ContextFilter())
-    handler.setFormatter(
-        logging.Formatter("%(message)s | rid=%(request_id)s uid=%(user_id)s")
-    )
+    handler.setFormatter(logging.Formatter("%(message)s | rid=%(request_id)s uid=%(user_id)s"))
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)

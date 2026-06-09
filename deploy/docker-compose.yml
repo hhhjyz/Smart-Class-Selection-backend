@@ -9,6 +9,7 @@ services:
     env_file: ../.env
     ports:
       - "8003:8003"
+    restart: on-failure  # 上游(rabbitmq)就绪前会重试启动
     depends_on:
       - course-selection-pg
       - course-selection-redis
@@ -21,6 +22,7 @@ services:
     environment:
       MODE: worker
     env_file: ../.env
+    restart: on-failure
     depends_on:
       - course-selection-pg
       - course-selection-redis
@@ -35,20 +37,17 @@ services:
     volumes:
       - ../migrations:/docker-entrypoint-initdb.d:ro
       - cs_pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # 不发布到宿主：仅内网供 api/worker 按服务名访问，避免与本机既有服务抢端口
 
   course-selection-redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
 
   rabbitmq:
     image: rabbitmq:3.13-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: stss
+      RABBITMQ_DEFAULT_PASS: stss
 
 volumes:
   cs_pg_data:

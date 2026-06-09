@@ -21,8 +21,8 @@ from psycopg import AsyncConnection
 
 from app.domain.audit import AuditEntry, OutboxEvent
 from app.domain.enrollment import Capacity, Enrollment
-from app.domain.offering import GradeRecord, Offering, StudentProfile
-from app.domain.study_plan import CurriculumRule, StudyPlan
+from app.domain.offering import CourseInfo, Offering, OfferingCatalogEntry, StudentProfile
+from app.domain.study_plan import CurriculumRule, StudyPlan, TrainingProgram
 
 
 # --------------------------------------------------------------------------- #
@@ -67,6 +67,10 @@ class CapacityRepository(Protocol):
 
     async def adjust_max(self, conn: AsyncConnection, offering_id: str, delta: int) -> Capacity | None: ...
 
+    async def seed_capacity(self, conn: AsyncConnection, offering_id: str, semester: str, max_capacity: int) -> None:
+        """从上游开课容量播种；已存在则不覆盖。"""
+        ...
+
     async def list_stale(self, conn: AsyncConnection, older_than_seconds: int) -> Sequence[Capacity]:
         """对账用：返回上次对账早于阈值的容量行。"""
         ...
@@ -92,8 +96,15 @@ class OfferingCacheRepository(Protocol):
     async def get(self, conn: AsyncConnection, offering_id: str) -> Offering | None: ...
 
     async def search(
-        self, conn: AsyncConnection, *, keyword: str | None, teacher_name: str | None,
-        semester: str | None, category: str | None, limit: int, offset: int,
+        self,
+        conn: AsyncConnection,
+        *,
+        keyword: str | None,
+        teacher_name: str | None,
+        semester: str | None,
+        category: str | None,
+        limit: int,
+        offset: int,
     ) -> tuple[Sequence[Offering], int]: ...
 
     async def list_for_student_timetable(
@@ -171,22 +182,33 @@ class WaitingRoom(Protocol):
 # --------------------------------------------------------------------------- #
 @runtime_checkable
 class InfoServiceClient(Protocol):
-    """A 组基础信息服务。"""
+    """A 组基础信息服务 info_service（前缀 /api/v1/info）：身份、课程目录、培养方案。
+
+    - 身份 `GET /users/{id}`；课程 `GET /courses/{id}`；
+    - 培养方案 `GET /data-provision/training-programs`（Service Token，供 C 组）。
+    开课时段/教室不在 A 组——见 :class:`ScheduleServiceClient`。
+    """
 
     async def get_student(self, student_id: str) -> StudentProfile: ...
 
-    async def get_curriculum_rules(self, plan_id: str) -> Sequence[CurriculumRule]: ...
+    async def get_course(self, course_id: int) -> CourseInfo | None: ...
 
-    async def get_grades(self, student_id: str) -> Sequence[GradeRecord]: ...
+    async def list_offerings(self, term_code: str) -> Sequence[OfferingCatalogEntry]: ...
+
+    async def list_training_programs(
+        self, major_code: str, grade: str | None = None, version: str | None = None
+    ) -> Sequence[TrainingProgram]: ...
 
 
 @runtime_checkable
 class ScheduleServiceClient(Protocol):
-    """B 组排课服务。"""
+    """B 组排课服务（zjuse-schedule，前缀 /api/v1）：开课时段与教室的权威来源。
 
-    async def list_offerings(self, semester: str, page: int, page_size: int) -> Sequence[Offering]: ...
+    `GET /schedule/entries?semester=` 返回排课条目（B 组明确供下游智能选课组拉取），
+    适配层按课程聚合条目、解析教室，产出本地 :class:`Offering`。
+    """
 
-    async def get_offering(self, offering_id: str) -> Offering | None: ...
+    async def list_offerings(self, semester: str) -> Sequence[Offering]: ...
 
 
 @runtime_checkable
