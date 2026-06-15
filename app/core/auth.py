@@ -19,6 +19,12 @@ class Role(str, enum.Enum):
     ADMIN = "admin"
 
 
+_ROLE_ALIASES = {
+    "academic_admin": Role.ADMIN,
+    "sys_admin": Role.ADMIN,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Principal:
     """当前请求的身份主体。由接入层从 header 构造，向下传递。"""
@@ -52,8 +58,11 @@ def principal_from_headers(user_id: str | None, role: str | None, permissions: s
     """
     if not user_id or not role:
         raise DomainError(ERR_UNAUTHENTICATED)
+    normalized_role = role.strip().lower()
     try:
-        parsed = Role(role.lower())
+        parsed = _ROLE_ALIASES.get(normalized_role)
+        if parsed is None:
+            parsed = Role(normalized_role)
     except ValueError as exc:
         raise DomainError(ERR_UNAUTHENTICATED, "未知角色") from exc
     perms = tuple(p.strip() for p in permissions.split(",") if p.strip()) if permissions else ()

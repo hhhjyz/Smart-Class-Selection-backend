@@ -16,6 +16,7 @@ from prometheus_client import make_asgi_app
 
 from app.api.errors_handler import register_exception_handlers
 from app.api.handlers import admin, ai, courses, enrollments, study_plans, teaching
+from app.api.path_compat import CourseSelectionPathCompatMiddleware
 from app.core import db, mq, redis
 from app.core.config import get_settings
 from app.core.http import close_http, open_http
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    app.add_middleware(CourseSelectionPathCompatMiddleware)
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     for module in (enrollments, study_plans, courses, teaching, admin, ai):
