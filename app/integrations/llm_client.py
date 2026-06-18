@@ -35,10 +35,15 @@ class HttpLLMClient:
             payload["tools"] = list(tools)
         async with self._sem:
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client, client.stream(
-                    "POST", f"{self._settings.llm_base_url}/chat/completions",
-                    json=payload, headers=self._headers(),
-                ) as resp:
+                async with (
+                    httpx.AsyncClient(timeout=self._timeout) as client,
+                    client.stream(
+                        "POST",
+                        f"{self._settings.llm_base_url}/chat/completions",
+                        json=payload,
+                        headers=self._headers(),
+                    ) as resp,
+                ):
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
                         chunk = _parse_sse_line(line)
@@ -67,7 +72,7 @@ def _parse_sse_line(line: str) -> dict[str, object] | None:
     """把 OpenAI 流式行解析成 {content} / {tool_call} / done 块。"""
     if not line or not line.startswith("data:"):
         return None
-    data = line[len("data:"):].strip()
+    data = line[len("data:") :].strip()
     if data == "[DONE]":
         return {"done": True}
     try:

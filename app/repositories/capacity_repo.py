@@ -52,6 +52,13 @@ SQL_MARK_RECONCILED = """
 UPDATE course_selection.course_capacity SET last_reconciled_at = NOW() WHERE offering_id = %s
 """
 
+# 预热播种：仅在不存在时写入（DO NOTHING 保留管理员调整与已选人数，刷新不覆盖）
+SQL_SEED_CAPACITY = """
+INSERT INTO course_selection.course_capacity (offering_id, semester, max_capacity, enrolled_count)
+VALUES (%s, %s, %s, 0)
+ON CONFLICT (offering_id) DO NOTHING
+"""
+
 
 class PgCapacityRepository:
     async def get(self, conn: AsyncConnection, offering_id: str) -> Capacity | None:
@@ -81,3 +88,7 @@ class PgCapacityRepository:
 
     async def mark_reconciled(self, conn: AsyncConnection, offering_id: str) -> None:
         await conn.execute(SQL_MARK_RECONCILED, (offering_id,))
+
+    async def seed_capacity(self, conn: AsyncConnection, offering_id: str, semester: str, max_capacity: int) -> None:
+        """从上游开课容量播种本地权威库存；已存在则不动（保留管理员调整/已选数）。"""
+        await conn.execute(SQL_SEED_CAPACITY, (offering_id, semester, max_capacity))

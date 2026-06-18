@@ -41,13 +41,32 @@ class Settings(BaseSettings):
     rmq_url: str = "amqp://stss:stss@rabbitmq:5672/"
     rmq_exchange_enrollment: str = "enrollment.events"
 
-    # 上游服务（A / B 组）
-    info_service_base_url: str = "http://info-service:8001"
-    schedule_service_base_url: str = "http://schedule-service:8002"
+    # 上游 A（基础信息 info_service）：前缀 /api/v1/info、响应壳 {code,message,data}、
+    # 服务间走 Service Token（Authorization: Bearer）直连（data-provision 用 service token）。
+    # 已核对其仓库 group1-base/info_service。
+    info_service_base_url: str = "http://info-service:8000"
+    info_user_path: str = "/api/v1/info/users/{id}"  # → UserResponse(user_no, profile.full_name)
+    info_course_path: str = "/api/v1/info/courses/{id}"  # → CourseResponse(course_code, course_name, credit)
+    info_offerings_path: str = "/api/v1/info/offerings"  # → OfferingResponse(course_id, course_code/name, capacity)
+    info_training_programs_path: str = "/api/v1/info/data-provision/training-programs"  # 培养方案（供 C 组）
     info_service_timeout_ms: int = 2000
+    # 服务间令牌：A 组 POST /api/v1/auth/sys/login（client_id/secret）签发 service token。
+    # 这里直接配置已签发的 token（运行期可换成登录换取+缓存刷新）。空=不带 Authorization。
+    info_service_token: str = ""
+
+    # 上游 B（排课 zjuse-schedule）：开课时段/教室的权威来源。真实契约（已核对其仓库）——
+    # 前缀 /api/v1、响应壳 {code,msg,data}（code=0 成功）、鉴权走网关头 X-User-Id/X-User-Role。
+    # B 组注释明确「下游(智能选课组)可通过 /schedule/entries 拉取课表数据」。
+    schedule_service_base_url: str = "http://schedule-service:8000"
+    schedule_entries_path: str = "/api/v1/schedule/entries"
+    schedule_classrooms_path: str = "/api/v1/classrooms"
     schedule_service_timeout_ms: int = 2000
+    # 服务身份：B 组 get_current_user 要求网关头存在，服务间调用以管理员身份透传。
+    schedule_service_user_id: str = "course-selection-svc"
+    schedule_service_role: str = "ADMIN"
+
     upstream_max_retries: int = 2
-    # 连续多少次 5xx/网络错触发熔断
+    # 连续多少次 5xx/网络错触发熔断（保留给 LLM 等已有外部依赖）
     circuit_break_threshold: int = 5
     circuit_break_cooldown_s: int = 30
 
@@ -55,6 +74,11 @@ class Settings(BaseSettings):
     jwt_user_header: str = "X-User-ID"
     jwt_role_header: str = "X-User-Role"
     request_id_header: str = "X-Request-ID"
+
+    # 仅开发：无网关时，从 Bearer token 推断身份（生产由网关注入 X-User-ID，保持 False）
+    dev_auth_from_token: bool = False
+    # 仅开发：CORS 允许的来源正则（前端直连后端时需要）；空=不启用 CORS（生产由网关处理）
+    dev_cors_origin_regex: str = ""
 
     # LLM
     llm_base_url: str = ""

@@ -32,6 +32,22 @@ class StudyPlan(BaseModel):
     items: tuple[StudyPlanItem, ...] = ()
 
 
+class TrainingProgram(BaseModel):
+    """培养方案（来源 A 组 `GET /api/v1/info/data-provision/training-programs`）。
+
+    A 组 TrainingProgramDataResponse：program_code / major_code / grade / version /
+    required_course_ids(list[int])，即该专业要求修读的课程 id 列表。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    program_code: str
+    major_code: str
+    grade: str
+    version: str = "1.0"
+    required_course_ids: tuple[int, ...] = ()
+
+
 class CurriculumRule(BaseModel):
     """培养方案规则缓存项，对应 curriculum_rules 表。"""
 

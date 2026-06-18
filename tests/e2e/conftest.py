@@ -42,9 +42,10 @@ async def _build(migrated_db: str, redis_url: str, rmq_url: str) -> AsyncIterato
 
     app = create_app()
     transport = httpx.ASGITransport(app=app)
-    async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=transport, base_url="http://testserver", follow_redirects=True
-    ) as ac:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://testserver", follow_redirects=True) as ac,
+    ):
         yield app, ac
 
 

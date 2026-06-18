@@ -58,12 +58,17 @@ ON CONFLICT (offering_id) DO UPDATE SET
 
 def _row_to_offering(r: tuple) -> Offering:
     slots_raw = r[6] if isinstance(r[6], list) else json.loads(r[6] or "[]")
-    slots = tuple(
-        TimeSlot(day=s["day"], period=tuple(s["period"]), weeks=s["weeks"]) for s in slots_raw
-    )
+    slots = tuple(TimeSlot(day=s["day"], period=tuple(s["period"]), weeks=s["weeks"]) for s in slots_raw)
     return Offering(
-        offering_id=r[0], course_code=r[1], course_name=r[2], teacher_id=r[3],
-        teacher_name=r[4], semester=r[5], time_slots=slots, classroom=r[7], campus=r[8],
+        offering_id=r[0],
+        course_code=r[1],
+        course_name=r[2],
+        teacher_id=r[3],
+        teacher_name=r[4],
+        semester=r[5],
+        time_slots=slots,
+        classroom=r[7],
+        campus=r[8],
     )
 
 
@@ -74,8 +79,15 @@ class PgOfferingCacheRepository:
         return _row_to_offering(row) if row else None
 
     async def search(
-        self, conn: AsyncConnection, *, keyword: str | None, teacher_name: str | None,
-        semester: str | None, category: str | None, limit: int, offset: int,
+        self,
+        conn: AsyncConnection,
+        *,
+        keyword: str | None,
+        teacher_name: str | None,
+        semester: str | None,
+        category: str | None,
+        limit: int,
+        offset: int,
     ) -> tuple[Sequence[Offering], int]:
         params = (keyword, keyword, keyword, teacher_name, teacher_name, semester, semester)
         cur = await conn.execute(SQL_SEARCH, (*params, limit, offset))
@@ -96,8 +108,17 @@ class PgOfferingCacheRepository:
             slots = json.dumps([{"day": s.day, "period": list(s.period), "weeks": s.weeks} for s in o.time_slots])
             await conn.execute(
                 SQL_UPSERT,
-                (o.offering_id, o.course_code, o.course_name, o.teacher_id, o.teacher_name,
-                 o.semester, slots, o.classroom, o.campus),
+                (
+                    o.offering_id,
+                    o.course_code,
+                    o.course_name,
+                    o.teacher_id,
+                    o.teacher_name,
+                    o.semester,
+                    slots,
+                    o.classroom,
+                    o.campus,
+                ),
             )
             n += 1
         return n

@@ -7,7 +7,8 @@ import pytest
 from app.core import errors
 from app.core.auth import Principal, Role
 from app.domain.enums import ItemCategory, RuleType
-from app.domain.study_plan import CurriculumRule, StudyPlanItem
+from app.domain.offering import CourseInfo
+from app.domain.study_plan import CurriculumRule, StudyPlanItem, TrainingProgram
 from app.services.ai_advisor import AIAdvisor
 from app.services.enrollment_service import EnrollmentService
 from app.services.reconciler import Reconciler
@@ -26,8 +27,13 @@ def _patch_db(monkeypatch):  # type: ignore[no-untyped-def]
 
 def _items(*credits: float) -> list[StudyPlanItem]:
     return [
-        StudyPlanItem(plan_item_id=f"i{i}", course_code=f"C{i}", category=ItemCategory.MAJOR_REQUIRED,
-                      expected_semester="2026-1", credit=c)
+        StudyPlanItem(
+            plan_item_id=f"i{i}",
+            course_code=f"C{i}",
+            category=ItemCategory.MAJOR_REQUIRED,
+            expected_semester="2026-1",
+            credit=c,
+        )
         for i, c in enumerate(credits)
     ]
 
@@ -35,9 +41,16 @@ def _items(*credits: float) -> list[StudyPlanItem]:
 # ----------------------- StudyPlanService -----------------------
 @pytest.mark.asyncio
 async def test_study_plan_save_valid() -> None:
-    rule = CurriculumRule(rule_id="r1", major_code="CS", curriculum_version="2023",
-                          rule_type=RuleType.MIN_CREDIT_TOTAL, payload={"min": 8})
-    svc = StudyPlanService(study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]))
+    rule = CurriculumRule(
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.MIN_CREDIT_TOTAL,
+        payload={"min": 8},
+    )
+    svc = StudyPlanService(
+        study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]), info_client=fakes.FakeInfoServiceClient()
+    )
     plan, violations = await svc.save(_STUDENT, major_code="CS", curriculum_version="2023", items=_items(5, 5))
     assert plan.status.value == "valid"
     assert violations == []
@@ -45,9 +58,16 @@ async def test_study_plan_save_valid() -> None:
 
 @pytest.mark.asyncio
 async def test_study_plan_save_invalid_raises_30101() -> None:
-    rule = CurriculumRule(rule_id="r1", major_code="CS", curriculum_version="2023",
-                          rule_type=RuleType.MIN_CREDIT_TOTAL, payload={"min": 20})
-    svc = StudyPlanService(study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]))
+    rule = CurriculumRule(
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.MIN_CREDIT_TOTAL,
+        payload={"min": 20},
+    )
+    svc = StudyPlanService(
+        study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]), info_client=fakes.FakeInfoServiceClient()
+    )
     with pytest.raises(errors.DomainError) as ei:
         await svc.save(_STUDENT, major_code="CS", curriculum_version="2023", items=_items(3))
     assert ei.value.code == errors.ERR_PLAN_RULE_FAILED
@@ -55,10 +75,16 @@ async def test_study_plan_save_invalid_raises_30101() -> None:
 
 @pytest.mark.asyncio
 async def test_study_plan_validate_category_rule() -> None:
-    rule = CurriculumRule(rule_id="r1", major_code="CS", curriculum_version="2023",
-                          rule_type=RuleType.MIN_CREDIT_CATEGORY,
-                          payload={"category": "major_elective", "min": 4})
-    svc = StudyPlanService(study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]))
+    rule = CurriculumRule(
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.MIN_CREDIT_CATEGORY,
+        payload={"category": "major_elective", "min": 4},
+    )
+    svc = StudyPlanService(
+        study_plan_repo=fakes.FakeStudyPlanRepository(rules=[rule]), info_client=fakes.FakeInfoServiceClient()
+    )
     v = await svc.validate_dry_run("S-1", major_code="CS", curriculum_version="2023", items=_items(5, 5))
     assert v and v[0].rule_type is RuleType.MIN_CREDIT_CATEGORY
 
@@ -66,9 +92,25 @@ async def test_study_plan_validate_category_rule() -> None:
 @pytest.mark.asyncio
 async def test_study_plan_get_and_delete() -> None:
     repo = fakes.FakeStudyPlanRepository()
-    svc = StudyPlanService(study_plan_repo=repo)
+    svc = StudyPlanService(study_plan_repo=repo, info_client=fakes.FakeInfoServiceClient())
     assert await svc.get("S-1") is None
     assert await svc.delete_item(_STUDENT, "x") is False
+
+
+@pytest.mark.asyncio
+async def test_study_plan_get_program_from_a_team() -> None:
+    # 培养方案来自 A 组 data-provision：required_course_ids → 解析课程目录 → 必修项
+    info = fakes.FakeInfoServiceClient(
+        courses={
+            7: CourseInfo(course_id=7, course_code="CS101", course_name="软件工程", credit=3),
+            8: CourseInfo(course_id=8, course_code="CS102", course_name="数据结构", credit=4),
+        },
+        programs=[TrainingProgram(program_code="CS-2023", major_code="CS", grade="2023", required_course_ids=(7, 8))],
+    )
+    svc = StudyPlanService(study_plan_repo=fakes.FakeStudyPlanRepository(), info_client=info)
+    items = await svc.get_program(major_code="CS", grade="2023")
+    assert [i.course_code for i in items] == ["CS101", "CS102"]
+    assert items[0].category is ItemCategory.MAJOR_REQUIRED and items[1].credit == 4
 
 
 # ----------------------- AIAdvisor -----------------------
@@ -78,9 +120,12 @@ def _enroll_service(stock=2):  # type: ignore[no-untyped-def]
         capacity_repo=fakes.FakeCapacityRepository({_OID: fakes.make_capacity(_OID, 50, 0)}),
         offering_repo=fakes.FakeOfferingCacheRepository({_OID: fakes.make_offering(_OID)}),
         study_plan_repo=fakes.FakeStudyPlanRepository(),
-        audit_repo=fakes.FakeAuditRepository(), outbox_repo=fakes.FakeOutboxRepository(),
-        stock=fakes.FakeStockStore({_OID: stock}), waiting_room=fakes.FakeWaitingRoom(admitted=True),
-        info_client=fakes.FakeInfoServiceClient(), rule_engine=RuleEngine(),
+        audit_repo=fakes.FakeAuditRepository(),
+        outbox_repo=fakes.FakeOutboxRepository(),
+        stock=fakes.FakeStockStore({_OID: stock}),
+        waiting_room=fakes.FakeWaitingRoom(admitted=True),
+        info_client=fakes.FakeInfoServiceClient(),
+        rule_engine=RuleEngine(),
     )
 
 
@@ -88,16 +133,24 @@ def _enroll_service(stock=2):  # type: ignore[no-untyped-def]
 async def test_ai_stream_passthrough_and_guardrail() -> None:
     # 正常 delta + done
     llm_ok = fakes.FakeLLMClient([{"content": "推荐"}, {"done": True}])
-    advisor = AIAdvisor(llm_client=llm_ok, offering_repo=fakes.FakeOfferingCacheRepository(),
-                        audit_repo=fakes.FakeAuditRepository(), enrollment_service=_enroll_service())
+    advisor = AIAdvisor(
+        llm_client=llm_ok,
+        offering_repo=fakes.FakeOfferingCacheRepository(),
+        audit_repo=fakes.FakeAuditRepository(),
+        enrollment_service=_enroll_service(),
+    )
     chunks = [c async for c in advisor.stream_message(_STUDENT, "hi")]
     assert {"content": "推荐"} in chunks
 
     # 越界工具调用 → 502 + audit
     audit = fakes.FakeAuditRepository()
     llm_bad = fakes.FakeLLMClient([{"tool_call": {"name": "rm_rf", "arguments": "{}"}}])
-    advisor2 = AIAdvisor(llm_client=llm_bad, offering_repo=fakes.FakeOfferingCacheRepository(),
-                         audit_repo=audit, enrollment_service=_enroll_service())
+    advisor2 = AIAdvisor(
+        llm_client=llm_bad,
+        offering_repo=fakes.FakeOfferingCacheRepository(),
+        audit_repo=audit,
+        enrollment_service=_enroll_service(),
+    )
     with pytest.raises(errors.UpstreamDown):
         _ = [c async for c in advisor2.stream_message(_STUDENT, "hi")]
     assert audit.entries[0].action == "ai.guardrail.violated"
@@ -106,8 +159,12 @@ async def test_ai_stream_passthrough_and_guardrail() -> None:
 @pytest.mark.asyncio
 async def test_ai_allowed_tool_passes() -> None:
     llm = fakes.FakeLLMClient([{"tool_call": {"name": "search_courses", "arguments": "{}"}}, {"done": True}])
-    advisor = AIAdvisor(llm_client=llm, offering_repo=fakes.FakeOfferingCacheRepository(),
-                        audit_repo=fakes.FakeAuditRepository(), enrollment_service=_enroll_service())
+    advisor = AIAdvisor(
+        llm_client=llm,
+        offering_repo=fakes.FakeOfferingCacheRepository(),
+        audit_repo=fakes.FakeAuditRepository(),
+        enrollment_service=_enroll_service(),
+    )
     chunks = [c async for c in advisor.stream_message(_STUDENT, "hi")]
     assert any("tool_call" in c for c in chunks)
 

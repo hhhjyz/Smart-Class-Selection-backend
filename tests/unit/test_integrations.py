@@ -1,4 +1,4 @@
-"""integrations 客户端单测：用 httpx.MockTransport 模拟上游，无需真实服务。"""
+"""integrations 客户端单测：A 组基础信息 + B 组排课（httpx MockTransport）+ LLM。"""
 
 from __future__ import annotations
 
@@ -13,65 +13,224 @@ from app.integrations.schedule_client import HttpScheduleServiceClient
 
 
 def _install_transport(monkeypatch, handler) -> None:  # type: ignore[no-untyped-def]
-    """把全局 httpx 客户端替换为带 MockTransport 的客户端。"""
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(http_mod, "_client", client)
 
 
 @pytest.mark.asyncio
-async def test_info_client_parses_student_and_grades(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+async def test_info_get_student_maps_user_no_and_full_name(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # A 组真实 UserResponse：{id, user_no, username, profile:{full_name}}；映射 user_no→学号、full_name→姓名
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/grades"):
-            return httpx.Response(200, json={"data": {"grades": [
-                {"course_code": "DS201", "credit": 3, "passed": True},
-            ]}})
-        return httpx.Response(200, json={"data": {
-            "student_id": "S-1", "name": "李同学", "major_code": "CS", "curriculum_version": "2023",
-        }})
+        assert req.url.path == "/api/v1/info/users/S-1"
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "message": "success",
+                "data": {"id": 1, "user_no": "S-1", "username": "stu", "profile": {"full_name": "李同学"}},
+            },
+        )
+
     _install_transport(monkeypatch, handler)
-    client = HttpInfoServiceClient()
-    prof = await client.get_student("S-1")
-    assert prof.name == "李同学"
-    grades = await client.get_grades("S-1")
-    assert grades[0].course_code == "DS201" and grades[0].passed
+    prof = await HttpInfoServiceClient().get_student("S-1")
+    assert prof.student_id == "S-1" and prof.name == "李同学"
 
 
 @pytest.mark.asyncio
-async def test_info_client_4xx_raises_upstream(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    _install_transport(monkeypatch, lambda req: httpx.Response(400, json={}))
+async def test_info_get_course(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/info/courses/7"
+        return httpx.Response(
+            200, json={"code": 0, "data": {"id": 7, "course_code": "CS101", "course_name": "软件工程", "credit": 3}}
+        )
+
+    _install_transport(monkeypatch, handler)
+    c = await HttpInfoServiceClient().get_course(7)
+    assert c is not None and c.course_code == "CS101" and c.course_name == "软件工程" and c.credit == 3
+
+
+@pytest.mark.asyncio
+async def test_info_list_offerings(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # A 组 OfferingResponse 列表壳；仅取 ACTIVE
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/info/offerings"
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "id": 11,
+                            "course_id": 7,
+                            "course_code": "CS101",
+                            "course_name": "软件工程",
+                            "term_code": "2026-1",
+                            "class_no": "01",
+                            "capacity": 100,
+                            "status": "ACTIVE",
+                        },
+                        {
+                            "id": 12,
+                            "course_id": 8,
+                            "course_code": "X",
+                            "course_name": "停开",
+                            "term_code": "2026-1",
+                            "class_no": "01",
+                            "capacity": 0,
+                            "status": "CLOSED",
+                        },
+                    ],
+                    "pagination": {"total": 2, "page": 1, "page_size": 100},
+                },
+            },
+        )
+
+    _install_transport(monkeypatch, handler)
+    offs = await HttpInfoServiceClient().list_offerings("2026-1")
+    assert len(offs) == 1 and offs[0].offering_id == "11" and offs[0].capacity == 100  # CLOSED 被过滤
+
+
+@pytest.mark.asyncio
+async def test_info_list_training_programs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # data-provision 列表壳：data:{items, pagination, snapshot_time}
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/info/data-provision/training-programs"
+        assert req.url.params.get("major_code") == "CS"
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "id": 1,
+                            "program_code": "CS-2023",
+                            "major_code": "CS",
+                            "grade": "2023",
+                            "version": "1.0",
+                            "required_course_ids": [7, 8, 9],
+                        }
+                    ],
+                    "pagination": {"total": 1, "page": 1, "page_size": 100},
+                },
+            },
+        )
+
+    _install_transport(monkeypatch, handler)
+    progs = await HttpInfoServiceClient().list_training_programs("CS", grade="2023")
+    assert len(progs) == 1 and progs[0].major_code == "CS"
+    assert progs[0].required_course_ids == (7, 8, 9)
+
+
+@pytest.mark.asyncio
+async def test_info_sends_bearer_token(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["auth"] = req.headers.get("Authorization")
+        return httpx.Response(200, json={"code": 0, "data": {"id": "S-1", "name": "x"}})
+
+    _install_transport(monkeypatch, handler)
+    client = HttpInfoServiceClient()
+    client._settings = client._settings.model_copy(update={"info_service_token": "svc-tok"})
+    await client.get_student("S-1")
+    assert seen["auth"] == "Bearer svc-tok"
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # B 组真实契约：{code,msg,data:[...]}，/schedule/entries + /classrooms，网关头 X-User-Id/Role
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/v1/schedule/entries":
+            assert req.headers.get("X-User-Id") == "course-selection-svc"
+            assert req.headers.get("X-User-Role") == "ADMIN"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "msg": "success",
+                    "data": [
+                        {
+                            "id": 1,
+                            "semester": "2026-1",
+                            "course_id": "CS101",
+                            "teacher_ids": ["T-9001"],
+                            "classroom_id": 10,
+                            "day_of_week": 1,
+                            "slot_start": 1,
+                            "slot_end": 2,
+                            "week_start": 1,
+                            "week_end": 16,
+                            "week_parity": "ALL",
+                        },
+                        {
+                            "id": 2,
+                            "semester": "2026-1",
+                            "course_id": "CS101",
+                            "teacher_ids": ["T-9001"],
+                            "classroom_id": 10,
+                            "day_of_week": 3,
+                            "slot_start": 3,
+                            "slot_end": 4,
+                            "week_start": 1,
+                            "week_end": 15,
+                            "week_parity": "ODD",
+                        },
+                    ],
+                },
+            )
+        if req.url.path == "/api/v1/classrooms":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": [
+                        {
+                            "id": 10,
+                            "code": "A101",
+                            "name": "紫金港西1-201",
+                            "campus": "紫金港",
+                            "building": "西1",
+                            "capacity": 120,
+                            "room_type": "LECTURE",
+                            "available_time": [],
+                            "is_active": True,
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(404, json={})
+
+    _install_transport(monkeypatch, handler)
+    offs = await HttpScheduleServiceClient().list_offerings("2026-1")
+    assert len(offs) == 1
+    o = offs[0]
+    assert o.offering_id == "CS101-2026-1" and o.course_code == "CS101" and o.teacher_id == "T-9001"
+    assert len(o.time_slots) == 2
+    assert o.time_slots[0].day == 1 and o.time_slots[0].period == (1, 2) and o.time_slots[0].weeks == "1-16周"
+    assert o.time_slots[1].period == (3, 4) and o.time_slots[1].weeks == "1-15周(单)"
+    assert o.classroom == "紫金港西1-201" and o.campus == "紫金港"
+
+
+@pytest.mark.asyncio
+async def test_schedule_business_error_code(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _install_transport(monkeypatch, lambda req: httpx.Response(200, json={"code": 2005, "msg": "x", "data": None}))
+    with pytest.raises(errors.UpstreamDown):
+        await HttpScheduleServiceClient().list_offerings("2026-1")
+
+
+@pytest.mark.asyncio
+async def test_info_business_error_code(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _install_transport(monkeypatch, lambda req: httpx.Response(200, json={"code": 1001, "data": {}}))
     with pytest.raises(errors.UpstreamDown):
         await HttpInfoServiceClient().get_student("S-1")
 
 
-@pytest.mark.asyncio
-async def test_info_client_5xx_trips_breaker(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    _install_transport(monkeypatch, lambda req: httpx.Response(500, json={}))
-    client = HttpInfoServiceClient()
-    with pytest.raises(errors.UpstreamDown):
-        await client.get_student("S-1")  # 重试耗尽后熔断计数
-    # 触发足够失败后进入熔断快速失败
-    for _ in range(5):
-        with pytest.raises(errors.UpstreamDown):
-            await client.get_student("S-1")
+def _settings_with_llm():  # type: ignore[no-untyped-def]
+    from app.core.config import Settings
 
-
-@pytest.mark.asyncio
-async def test_schedule_client_offerings_and_404(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/offerings"):
-            return httpx.Response(200, json={"data": {"list": [{
-                "offering_id": "B-CS101-2026-1-01", "course_code": "CS101", "course_name": "软件工程",
-                "teacher_id": "T-9001", "teacher_name": "张老师", "semester": "2026-1",
-                "time_slots": [{"day": 1, "period": [1, 2], "weeks": "1-16"}],
-                "classroom": "201", "campus": "紫金港",
-            }]}})
-        return httpx.Response(404, json={})
-    _install_transport(monkeypatch, handler)
-    client = HttpScheduleServiceClient()
-    offerings = await client.list_offerings("2026-1", page=1, page_size=50)
-    assert offerings[0].course_code == "CS101"
-    assert offerings[0].time_slots[0].day == 1
-    assert await client.get_offering("missing") is None
+    return Settings(llm_base_url="http://llm", llm_api_key="k")
 
 
 @pytest.mark.asyncio
@@ -87,7 +246,6 @@ async def test_llm_client_stream_parsing(monkeypatch) -> None:  # type: ignore[n
 
     monkeypatch.setattr("app.integrations.llm_client.get_settings", _settings_with_llm)
     client = HttpLLMClient()
-    # 用独立的 httpx mock：llm_client 自建 client，故 patch httpx.AsyncClient.stream
     import app.integrations.llm_client as llm_mod
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -96,12 +254,6 @@ async def test_llm_client_stream_parsing(monkeypatch) -> None:  # type: ignore[n
     assert {"content": "你好"} in chunks
     assert any("tool_call" in c for c in chunks)
     assert {"done": True} in chunks
-
-
-def _settings_with_llm():  # type: ignore[no-untyped-def]
-    from app.core.config import Settings
-
-    return Settings(llm_base_url="http://llm", llm_api_key="k")
 
 
 @pytest.mark.asyncio

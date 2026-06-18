@@ -78,9 +78,7 @@ async def pg_pool(migrated_db: str) -> AsyncIterator[object]:
 
     from app.core.db import configure_connection
 
-    pool = AsyncConnectionPool(
-        migrated_db, min_size=2, max_size=16, configure=configure_connection, open=False
-    )
+    pool = AsyncConnectionPool(migrated_db, min_size=2, max_size=16, configure=configure_connection, open=False)
     await pool.open()
     try:
         yield pool
@@ -122,8 +120,6 @@ async def clean_capacity(pg_pool) -> AsyncIterator[None]:  # type: ignore[no-unt
     """每个测试前重置 course_capacity，避免相互污染。"""
     async with pg_pool.connection() as conn:
         await conn.execute("TRUNCATE course_selection.enrollments")
-        await conn.execute(
-            "UPDATE course_selection.course_capacity SET enrolled_count = 0, version = 0"
-        )
+        await conn.execute("UPDATE course_selection.course_capacity SET enrolled_count = 0, version = 0")
         await conn.commit()
     yield

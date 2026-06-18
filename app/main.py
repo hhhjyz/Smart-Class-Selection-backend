@@ -16,6 +16,7 @@ from prometheus_client import make_asgi_app
 
 from app.api.errors_handler import register_exception_handlers
 from app.api.handlers import admin, ai, courses, enrollments, study_plans, teaching
+from app.api.path_compat import CourseSelectionPathCompatMiddleware
 from app.core import db, mq, redis
 from app.core.config import get_settings
 from app.core.http import close_http, open_http
@@ -51,6 +52,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """构造 FastAPI 应用（api 模式入口）。"""
     app = FastAPI(title="Smart Course Selection", version="1.0.0", lifespan=lifespan)
+    # 仅开发：前端直连后端时放开 CORS（生产由网关处理跨域，dev_cors_origin_regex 为空则不启用）
+    settings = get_settings()
+    if settings.dev_cors_origin_regex:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=settings.dev_cors_origin_regex,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    app.add_middleware(CourseSelectionPathCompatMiddleware)
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     for module in (enrollments, study_plans, courses, teaching, admin, ai):

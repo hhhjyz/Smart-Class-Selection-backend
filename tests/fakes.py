@@ -17,8 +17,8 @@ from typing import Any
 from app.domain.audit import AuditEntry, OutboxEvent
 from app.domain.enrollment import Capacity, Enrollment
 from app.domain.enums import EnrollmentStatus
-from app.domain.offering import GradeRecord, Offering, StudentProfile
-from app.domain.study_plan import CurriculumRule, StudyPlan
+from app.domain.offering import CourseInfo, Offering, OfferingCatalogEntry, StudentProfile
+from app.domain.study_plan import CurriculumRule, StudyPlan, TrainingProgram
 
 
 # --------------------------------------------------------------------------- #
@@ -47,8 +47,11 @@ class FakeEnrollmentRepository:
     async def insert(self, conn: Any, e: Enrollment) -> str | None:
         # 唯一约束：(student, offering, semester) 与 idempotency_key
         for r in self.rows.values():
-            if (r.student_id, r.offering_id, r.semester) == (e.student_id, e.offering_id, e.semester) \
-                    and r.status != EnrollmentStatus.CANCELED:
+            if (r.student_id, r.offering_id, r.semester) == (
+                e.student_id,
+                e.offering_id,
+                e.semester,
+            ) and r.status != EnrollmentStatus.CANCELED:
                 return None
         self.rows[e.enrollment_id] = e
         return e.enrollment_id
@@ -68,9 +71,9 @@ class FakeEnrollmentRepository:
         self, conn: Any, student_id: str, semester: str, status: str | None
     ) -> Sequence[Enrollment]:
         return [
-            r for r in self.rows.values()
-            if r.student_id == student_id and r.semester == semester
-            and (status is None or r.status.value == status)
+            r
+            for r in self.rows.values()
+            if r.student_id == student_id and r.semester == semester and (status is None or r.status.value == status)
         ]
 
     async def find_by_idempotency_key(self, conn: Any, key: str) -> Enrollment | None:
@@ -115,6 +118,14 @@ class FakeCapacityRepository:
         self.caps[offering_id] = c
         return c
 
+    async def seed_capacity(self, conn: Any, offering_id: str, semester: str, max_capacity: int) -> None:
+        self.caps.setdefault(
+            offering_id,
+            Capacity(
+                offering_id=offering_id, semester=semester, max_capacity=max_capacity, enrolled_count=0, version=0
+            ),
+        )
+
     async def list_stale(self, conn: Any, older_than_seconds: int) -> Sequence[Capacity]:
         return list(self.caps.values())
 
@@ -153,7 +164,7 @@ class FakeOfferingCacheRepository:
 
     async def search(self, conn: Any, *, keyword, teacher_name, semester, category, limit, offset):  # type: ignore[no-untyped-def]
         items = list(self.offerings.values())
-        return items[offset:offset + limit], len(items)
+        return items[offset : offset + limit], len(items)
 
     async def list_for_student_timetable(self, conn: Any, student_id: str, semester: str) -> Sequence[Offering]:
         return self.timetable
@@ -243,20 +254,39 @@ class FakeWaitingRoom:
 # Integration client fakes                                                    #
 # --------------------------------------------------------------------------- #
 class FakeInfoServiceClient:
-    def __init__(self, grades: Sequence[GradeRecord] = (), profile: StudentProfile | None = None) -> None:
-        self._grades = list(grades)
-        self._profile = profile or StudentProfile(
-            student_id="S-1", name="测试同学", major_code="CS", curriculum_version="2023"
-        )
+    def __init__(
+        self,
+        profile: StudentProfile | None = None,
+        courses: dict[int, CourseInfo] | None = None,
+        programs: Sequence[TrainingProgram] = (),
+        offerings: Sequence[OfferingCatalogEntry] = (),
+    ) -> None:
+        self._profile = profile or StudentProfile(student_id="S-1", name="测试同学")
+        self._courses = courses or {}
+        self._programs = list(programs)
+        self._offerings = list(offerings)
 
     async def get_student(self, student_id: str) -> StudentProfile:
         return self._profile
 
-    async def get_curriculum_rules(self, plan_id: str) -> Sequence[CurriculumRule]:
-        return []
+    async def get_course(self, course_id: int) -> CourseInfo | None:
+        return self._courses.get(course_id)
 
-    async def get_grades(self, student_id: str) -> Sequence[GradeRecord]:
-        return self._grades
+    async def list_offerings(self, term_code: str) -> Sequence[OfferingCatalogEntry]:
+        return [o for o in self._offerings if o.term_code == term_code]
+
+    async def list_training_programs(
+        self, major_code: str, grade: str | None = None, version: str | None = None
+    ) -> Sequence[TrainingProgram]:
+        return [p for p in self._programs if p.major_code == major_code]
+
+
+class FakeScheduleServiceClient:
+    def __init__(self, offerings: Sequence[Offering] = ()) -> None:
+        self._offerings = list(offerings)
+
+    async def list_offerings(self, semester: str) -> Sequence[Offering]:
+        return self._offerings
 
 
 class FakeLLMClient:
@@ -276,9 +306,15 @@ class FakeLLMClient:
 # --------------------------------------------------------------------------- #
 def make_offering(offering_id: str = "B-CS101-2026-1-01", course_code: str = "CS101", **kw: Any) -> Offering:
     base = {
-        "offering_id": offering_id, "course_code": course_code, "course_name": "软件工程",
-        "teacher_id": "T-9001", "teacher_name": "张老师", "semester": "2026-1",
-        "time_slots": (), "classroom": "201", "campus": "紫金港",
+        "offering_id": offering_id,
+        "course_code": course_code,
+        "course_name": "软件工程",
+        "teacher_id": "T-9001",
+        "teacher_name": "张老师",
+        "semester": "2026-1",
+        "time_slots": (),
+        "classroom": "201",
+        "campus": "紫金港",
     }
     base.update(kw)
     return Offering(**base)  # type: ignore[arg-type]
@@ -286,6 +322,10 @@ def make_offering(offering_id: str = "B-CS101-2026-1-01", course_code: str = "CS
 
 def make_capacity(offering_id: str = "B-CS101-2026-1-01", max_capacity: int = 50, enrolled: int = 0) -> Capacity:
     return Capacity(
-        offering_id=offering_id, semester="2026-1",
-        max_capacity=max_capacity, enrolled_count=enrolled, waitlist_count=0, version=0,
+        offering_id=offering_id,
+        semester="2026-1",
+        max_capacity=max_capacity,
+        enrolled_count=enrolled,
+        waitlist_count=0,
+        version=0,
     )

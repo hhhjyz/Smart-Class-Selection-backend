@@ -137,19 +137,25 @@ class EnrollmentService:
                 await self._audit.write(
                     conn,
                     AuditEntry(
-                        actor_id=principal.user_id, actor_role=principal.role.value,
-                        action="enroll.create", target_type="enrollment", target_id=inserted_id,
+                        actor_id=principal.user_id,
+                        actor_role=principal.role.value,
+                        action="enroll.create",
+                        target_type="enrollment",
+                        target_id=inserted_id,
                         after={"offering_id": offering_id, "student_id": student_id},
                     ),
                 )
                 await self._outbox.emit(
                     conn,
                     OutboxEvent(
-                        aggregate_type="enrollment", aggregate_id=inserted_id,
+                        aggregate_type="enrollment",
+                        aggregate_id=inserted_id,
                         event_type="enrollment.created",
                         payload={
-                            "enrollment_id": inserted_id, "student_id": student_id,
-                            "offering_id": offering_id, "semester": ctx.target.semester,
+                            "enrollment_id": inserted_id,
+                            "student_id": student_id,
+                            "offering_id": offering_id,
+                            "semester": ctx.target.semester,
                             "stage": stage.value,
                         },
                     ),
@@ -173,19 +179,25 @@ class EnrollmentService:
             await self._audit.write(
                 conn,
                 AuditEntry(
-                    actor_id=principal.user_id, actor_role=principal.role.value,
-                    action="enroll.drop", target_type="enrollment", target_id=enrollment_id,
+                    actor_id=principal.user_id,
+                    actor_role=principal.role.value,
+                    action="enroll.drop",
+                    target_type="enrollment",
+                    target_id=enrollment_id,
                     before={"offering_id": canceled.offering_id},
                 ),
             )
             await self._outbox.emit(
                 conn,
                 OutboxEvent(
-                    aggregate_type="enrollment", aggregate_id=enrollment_id,
+                    aggregate_type="enrollment",
+                    aggregate_id=enrollment_id,
                     event_type="enrollment.canceled",
                     payload={
-                        "enrollment_id": enrollment_id, "student_id": canceled.student_id,
-                        "offering_id": canceled.offering_id, "reason_code": "student_drop",
+                        "enrollment_id": enrollment_id,
+                        "student_id": canceled.student_id,
+                        "offering_id": canceled.offering_id,
+                        "reason_code": "student_drop",
                     },
                 ),
             )
@@ -220,55 +232,50 @@ class EnrollmentService:
     async def get_roster(
         self, offering_id: str, include_dropped: bool
     ) -> tuple[Offering | None, list[tuple[str, str, datetime | None]]]:
-        """读路径：花名册。返回 (开课信息, [(student_id, name, enrolled_at)])。"""
+        """读路径：花名册。返回 (开课信息, [(student_id, name, enrolled_at)])。
+
+        姓名经 A 组 `GET /api/v1/users/{id}` 补全（事务外）；A 组不可用时 name 留空降级。
+        """
         async with db.connection() as conn:
             offering = await self._offerings.get(conn, offering_id)
             rows = list(await self._enrollments.list_roster(conn, offering_id, include_dropped))
-        # 学生姓名经上游 A 组补全（事务外）
         students: list[tuple[str, str, datetime | None]] = []
         for student_id, enrolled_at in rows:
             try:
-                profile = await self._info.get_student(student_id)
-                name = profile.name
+                name = (await self._info.get_student(student_id)).name
             except errors.DomainError:
                 name = ""
             students.append((student_id, name, enrolled_at))
         return offering, students
 
-    async def _build_rule_context(
-        self, *, student_id: str, offering_id: str, allow_override: bool
-    ) -> RuleContext:
+    async def _build_rule_context(self, *, student_id: str, offering_id: str, allow_override: bool) -> RuleContext:
         """组装规则上下文。所有读操作在事务外完成。"""
         async with db.connection() as conn:
             target = await self._offerings.get(conn, offering_id)
             if target is None:
                 raise errors.NotFound("开课实例不存在")
-            existing = list(
-                await self._offerings.list_for_student_timetable(conn, student_id, target.semester)
-            )
+            existing = list(await self._offerings.list_for_student_timetable(conn, student_id, target.semester))
             plan = await self._plans.get_by_student(conn, student_id)
             rules = (
                 await self._plans.get_curriculum_rules(conn, plan.major_code, plan.curriculum_version)
                 if plan is not None
                 else []
             )
-        grades = await self._info.get_grades(student_id)
-        passed = frozenset(g.course_code for g in grades if g.passed)
-        target_credit = next((g.credit for g in grades if g.course_code == target.course_code), 0.0)
-        current_total = _sum_credits(existing)
+        # 历史成绩（前置课判定所需）目前**无任何组提供**该接口：A 组领域无成绩，
+        # F 组 API 也未发布"按学生查成绩"。故不依赖不存在的上游——passed_courses 留空。
+        # 前置课规则（PrerequisiteRule）逻辑保留并单测，待真实成绩源就绪后再投用配置。
         return RuleContext(
             target=target,
             existing_offerings=existing,
-            passed_courses=passed,
-            grades=grades,
+            passed_courses=frozenset(),
+            grades=(),
             curriculum_rules=rules,
-            current_total_credit=current_total,
-            target_credit=target_credit,
+            current_total_credit=_sum_credits(existing),
+            target_credit=0.0,
             allow_override=allow_override,
         )
 
 
 def _sum_credits(offerings: Sequence[Offering]) -> float:
-    # 学分汇总占位：实际可由 offering 携带或查 grades；此处保守返回 0，
-    # 学分上限规则以 ctx.target_credit + current 为准，详见 rule_engine。
+    # 学分汇总占位：开课实体当前不携带学分；学分上限规则以本地数据为准，详见 rule_engine。
     return 0.0

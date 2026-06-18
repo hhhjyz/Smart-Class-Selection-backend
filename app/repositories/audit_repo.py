@@ -24,8 +24,11 @@ class PgAuditRepository:
         await conn.execute(
             SQL_INSERT,
             (
-                entry.actor_id, entry.actor_role, entry.action,
-                entry.target_type, entry.target_id,
+                entry.actor_id,
+                entry.actor_role,
+                entry.action,
+                entry.target_type,
+                entry.target_id,
                 json.dumps(entry.before) if entry.before is not None else None,
                 json.dumps(entry.after) if entry.after is not None else None,
                 entry.request_id or current_request_id(),

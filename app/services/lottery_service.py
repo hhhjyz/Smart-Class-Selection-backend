@@ -46,8 +46,11 @@ class LotteryService:
             # 每个分片一个短事务，避免单个大事务长时间持锁
             async with db.transaction() as conn:
                 res = await run_shard(
-                    conn, semester=semester, shard=shard,
-                    total_shards=self._total_shards, seed=actual_seed,
+                    conn,
+                    semester=semester,
+                    shard=shard,
+                    total_shards=self._total_shards,
+                    seed=actual_seed,
                 )
             succeeded += res.succeeded
             failed += res.failed
@@ -62,19 +65,25 @@ class LotteryService:
             await self._audit.write(
                 conn,
                 AuditEntry(
-                    actor_id=principal.user_id, actor_role=principal.role.value,
-                    action="lottery.run", target_type="lottery_run", target_id=run_id,
+                    actor_id=principal.user_id,
+                    actor_role=principal.role.value,
+                    action="lottery.run",
+                    target_type="lottery_run",
+                    target_id=run_id,
                     after={"seed": actual_seed, "succeeded": succeeded, "failed": failed},
                 ),
             )
             await self._outbox.emit(
                 conn,
                 OutboxEvent(
-                    aggregate_type="lottery_run", aggregate_id=run_id,
+                    aggregate_type="lottery_run",
+                    aggregate_id=run_id,
                     event_type="lottery.completed",
                     payload={
-                        "run_id": run_id, "semester": semester,
-                        "succeeded_count": succeeded, "failed_count": failed,
+                        "run_id": run_id,
+                        "semester": semester,
+                        "succeeded_count": succeeded,
+                        "failed_count": failed,
                     },
                 ),
             )
@@ -87,6 +96,10 @@ class LotteryService:
         if row is None:
             return None
         return {
-            "run_id": row[0], "semester": row[1], "status": row[2],
-            "offering_count": row[3], "enrolled_count": row[4], "seed": row[5],
+            "run_id": row[0],
+            "semester": row[1],
+            "status": row[2],
+            "offering_count": row[3],
+            "enrolled_count": row[4],
+            "seed": row[5],
         }

@@ -48,9 +48,7 @@ async def send_message(
 
 
 @router.post("/recommendations")
-async def recommend(
-    body: RecommendRequest, principal: CurrentUser, advisor: AIAdvisorDep
-) -> Envelope[RecommendResult]:
+async def recommend(body: RecommendRequest, principal: CurrentUser, advisor: AIAdvisorDep) -> Envelope[RecommendResult]:
     principal.require_role(Role.STUDENT)
     # 推荐生成的完整 RAG 流程见 ai_advisor / 05_LLM-RAG 子系统；此处返回会话句柄占位
     rec_id = f"rec-{uuid.uuid4().hex[:8]}"
@@ -58,11 +56,7 @@ async def recommend(
 
 
 @router.post("/recommendations/{rec_id}/accept")
-async def accept_recommendation(
-    rec_id: str, principal: CurrentUser, advisor: AIAdvisorDep
-) -> Envelope[AcceptResult]:
+async def accept_recommendation(rec_id: str, principal: CurrentUser, advisor: AIAdvisorDep) -> Envelope[AcceptResult]:
     principal.require_role(Role.STUDENT)
     results = await advisor.accept(principal, rec_id)
-    return Envelope.ok(AcceptResult(
-        results=[AcceptResultItem.model_validate(r) for r in results]
-    ))
+    return Envelope.ok(AcceptResult(results=[AcceptResultItem.model_validate(r) for r in results]))

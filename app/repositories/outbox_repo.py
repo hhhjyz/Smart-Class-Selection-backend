@@ -52,8 +52,10 @@ class PgOutboxRepository:
         cur = await conn.execute(SQL_FETCH_PENDING, (limit,))
         out: list[tuple[str, str, bytes]] = []
         for event_id, event_type, payload in await cur.fetchall():
-            body = json.dumps(payload).encode() if not isinstance(payload, (str, bytes)) else (
-                payload.encode() if isinstance(payload, str) else payload
+            body = (
+                json.dumps(payload).encode()
+                if not isinstance(payload, (str, bytes))
+                else (payload.encode() if isinstance(payload, str) else payload)
             )
             out.append((str(event_id), event_type, body))
         return out

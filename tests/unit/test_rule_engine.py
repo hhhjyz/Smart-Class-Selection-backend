@@ -21,8 +21,14 @@ from app.services.rule_engine import (
 
 def _offering(oid: str, code: str, day: int, periods: tuple[int, ...], campus: str = "紫金港") -> Offering:
     return Offering(
-        offering_id=oid, course_code=code, course_name=code, teacher_id="T", teacher_name="师",
-        semester="2026-1", time_slots=(TimeSlot(day=day, period=periods, weeks="1-16"),), campus=campus,
+        offering_id=oid,
+        course_code=code,
+        course_name=code,
+        teacher_id="T",
+        teacher_name="师",
+        semester="2026-1",
+        time_slots=(TimeSlot(day=day, period=periods, weeks="1-16"),),
+        campus=campus,
     )
 
 
@@ -46,12 +52,13 @@ def test_no_time_conflict_different_day() -> None:
 def test_prerequisite_missing() -> None:
     target = _offering("o1", "OS301", day=3, periods=(5, 6))
     rule = CurriculumRule(
-        rule_id="r1", major_code="CS", curriculum_version="2023", rule_type=RuleType.PREREQUISITE,
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.PREREQUISITE,
         payload={"subject_key": "OS301", "requires": ["DS201"]},
     )
-    ctx = RuleContext(
-        target=target, existing_offerings=[], passed_courses=frozenset(), curriculum_rules=[rule]
-    )
+    ctx = RuleContext(target=target, existing_offerings=[], passed_courses=frozenset(), curriculum_rules=[rule])
     v = PrerequisiteRule().check(ctx)
     assert v is not None and v.code == errors.ERR_PREREQUISITE
 
@@ -59,7 +66,10 @@ def test_prerequisite_missing() -> None:
 def test_prerequisite_satisfied() -> None:
     target = _offering("o1", "OS301", day=3, periods=(5, 6))
     rule = CurriculumRule(
-        rule_id="r1", major_code="CS", curriculum_version="2023", rule_type=RuleType.PREREQUISITE,
+        rule_id="r1",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.PREREQUISITE,
         payload={"subject_key": "OS301", "requires": ["DS201"]},
     )
     ctx = RuleContext(
@@ -71,15 +81,24 @@ def test_prerequisite_satisfied() -> None:
 def test_credit_cap_soft_and_override() -> None:
     target = _offering("o1", "CS101", day=1, periods=(1, 2))
     ctx = RuleContext(
-        target=target, existing_offerings=[], passed_courses=frozenset(),
-        current_total_credit=29, target_credit=3, credit_cap=30,
+        target=target,
+        existing_offerings=[],
+        passed_courses=frozenset(),
+        current_total_credit=29,
+        target_credit=3,
+        credit_cap=30,
     )
     v = CreditCapRule().check(ctx)
     assert v is not None and v.severity is Severity.SOFT
     # 教务特批可强选
     ctx_override = RuleContext(
-        target=target, existing_offerings=[], passed_courses=frozenset(),
-        current_total_credit=29, target_credit=3, credit_cap=30, allow_override=True,
+        target=target,
+        existing_offerings=[],
+        passed_courses=frozenset(),
+        current_total_credit=29,
+        target_credit=3,
+        credit_cap=30,
+        allow_override=True,
     )
     assert CreditCapRule().check(ctx_override) is None
 
@@ -110,12 +129,16 @@ def test_campus_commute_soft_warning() -> None:
 def test_exclusive_rule() -> None:
     from app.services.rule_engine import ExclusiveRule
 
-    rule = CurriculumRule(rule_id="r", major_code="CS", curriculum_version="2023",
-                          rule_type=RuleType.EXCLUSIVE, payload={"group": ["CS101", "CS101H"]})
+    rule = CurriculumRule(
+        rule_id="r",
+        major_code="CS",
+        curriculum_version="2023",
+        rule_type=RuleType.EXCLUSIVE,
+        payload={"group": ["CS101", "CS101H"]},
+    )
     target = _offering("o1", "CS101", day=1, periods=(1,))
     existing = _offering("o2", "CS101H", day=2, periods=(1,))
-    ctx = RuleContext(target=target, existing_offerings=[existing], passed_courses=frozenset(),
-                      curriculum_rules=[rule])
+    ctx = RuleContext(target=target, existing_offerings=[existing], passed_courses=frozenset(), curriculum_rules=[rule])
     v = ExclusiveRule().check(ctx)
     assert v is not None and v.rule_type is RuleType.EXCLUSIVE
 
@@ -124,8 +147,14 @@ def test_credit_cap_within_limit_ok() -> None:
     from app.services.rule_engine import CreditCapRule
 
     target = _offering("o1", "CS101", day=1, periods=(1,))
-    ctx = RuleContext(target=target, existing_offerings=[], passed_courses=frozenset(),
-                      current_total_credit=10, target_credit=3, credit_cap=30)
+    ctx = RuleContext(
+        target=target,
+        existing_offerings=[],
+        passed_courses=frozenset(),
+        current_total_credit=10,
+        target_credit=3,
+        credit_cap=30,
+    )
     assert CreditCapRule().check(ctx) is None
 
 
@@ -135,14 +164,17 @@ def test_fuzz_engine_never_crashes(seed: int) -> None:
     rng = random.Random(seed)
     target = _offering("o1", "CS101", day=rng.randint(1, 5), periods=(rng.randint(1, 4),))
     existing = [
-        _offering(f"e{i}", f"C{i}", day=rng.randint(1, 5), periods=(rng.randint(1, 4),),
-                  campus=rng.choice(["紫金港", "玉泉"]))
+        _offering(
+            f"e{i}", f"C{i}", day=rng.randint(1, 5), periods=(rng.randint(1, 4),), campus=rng.choice(["紫金港", "玉泉"])
+        )
         for i in range(rng.randint(0, 8))
     ]
     ctx = RuleContext(
-        target=target, existing_offerings=existing,
+        target=target,
+        existing_offerings=existing,
         passed_courses=frozenset(rng.sample(["DS201", "MA101", "EE101"], rng.randint(0, 3))),
-        current_total_credit=rng.randint(0, 35), target_credit=rng.randint(1, 5),
+        current_total_credit=rng.randint(0, 35),
+        target_credit=rng.randint(1, 5),
     )
     # 不应抛出
     RuleEngine().validate(ctx)

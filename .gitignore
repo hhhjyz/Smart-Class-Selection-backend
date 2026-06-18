@@ -5,3 +5,6 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .env
+
+# Python build artifacts
+course_selection.egg-info/

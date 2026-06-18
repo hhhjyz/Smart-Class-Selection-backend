@@ -9,18 +9,43 @@ import uuid
 
 from app.core import db, errors
 from app.core.auth import Principal
-from app.domain.enums import PlanStatus, RuleType, Severity
-from app.domain.ports import StudyPlanRepository
+from app.domain.enums import ItemCategory, PlanStatus, RuleType, Severity
+from app.domain.ports import InfoServiceClient, StudyPlanRepository
 from app.domain.study_plan import StudyPlan, StudyPlanItem, Violation
 
 
 class StudyPlanService:
-    def __init__(self, *, study_plan_repo: StudyPlanRepository) -> None:
+    def __init__(self, *, study_plan_repo: StudyPlanRepository, info_client: InfoServiceClient) -> None:
         self._plans = study_plan_repo
+        self._info = info_client
 
     async def get(self, student_id: str) -> StudyPlan | None:
         async with db.connection() as conn:
             return await self._plans.get_by_student(conn, student_id)
+
+    async def get_program(
+        self, *, major_code: str, grade: str | None = None, version: str | None = None
+    ) -> list[StudyPlanItem]:
+        """从 A 组拉取本专业培养方案要求的课程，逐个解析课程目录，产出必修项列表。"""
+        programs = await self._info.list_training_programs(major_code, grade, version)
+        if not programs:
+            return []
+        prog = programs[0]
+        items: list[StudyPlanItem] = []
+        for course_id in prog.required_course_ids:
+            course = await self._info.get_course(course_id)
+            if course is None:
+                continue
+            items.append(
+                StudyPlanItem(
+                    plan_item_id=str(course_id),
+                    course_code=course.course_code,
+                    category=ItemCategory.MAJOR_REQUIRED,
+                    expected_semester="",
+                    credit=course.credit,
+                )
+            )
+        return items
 
     async def save(
         self, principal: Principal, *, major_code: str, curriculum_version: str, items: list[StudyPlanItem]
@@ -43,7 +68,8 @@ class StudyPlanService:
             raise errors.DomainError(
                 errors.ERR_PLAN_RULE_FAILED,
                 data={
-                    "status": status.value, "valid": False,
+                    "status": status.value,
+                    "valid": False,
                     "violations": [v.model_dump(mode="json") for v in violations],
                 },
             )
@@ -69,19 +95,27 @@ class StudyPlanService:
             if rule.rule_type is RuleType.MIN_CREDIT_TOTAL:
                 required = _as_float(rule.payload.get("min", 0))
                 if total < required:
-                    out.append(Violation(
-                        code=errors.ERR_PLAN_RULE_FAILED, rule_type=rule.rule_type,
-                        message=f"总学分 {total} < 要求 {required}", severity=Severity.HARD,
-                    ))
+                    out.append(
+                        Violation(
+                            code=errors.ERR_PLAN_RULE_FAILED,
+                            rule_type=rule.rule_type,
+                            message=f"总学分 {total} < 要求 {required}",
+                            severity=Severity.HARD,
+                        )
+                    )
             elif rule.rule_type is RuleType.MIN_CREDIT_CATEGORY:
                 cat = rule.payload.get("category")
                 required = _as_float(rule.payload.get("min", 0))
                 got = sum(i.credit for i in items if i.category.value == cat)
                 if got < required:
-                    out.append(Violation(
-                        code=errors.ERR_PLAN_RULE_FAILED, rule_type=rule.rule_type,
-                        message=f"{cat} 学分 {got} < 要求 {required}", severity=Severity.HARD,
-                    ))
+                    out.append(
+                        Violation(
+                            code=errors.ERR_PLAN_RULE_FAILED,
+                            rule_type=rule.rule_type,
+                            message=f"{cat} 学分 {got} < 要求 {required}",
+                            severity=Severity.HARD,
+                        )
+                    )
         return out
 
 

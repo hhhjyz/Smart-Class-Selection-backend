@@ -101,6 +101,16 @@ CREATE TABLE lottery_runs (
 );
 CREATE INDEX idx_lottery_runs_semester ON lottery_runs (semester, triggered_at DESC);
 
+CREATE TABLE enrollment_windows (
+    window_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    semester   TEXT NOT NULL,
+    stage      TEXT NOT NULL CHECK (stage IN ('preference','lottery','add_drop')),
+    start_at   TIMESTAMPTZ NOT NULL,
+    end_at     TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (semester, stage)
+);
+
 CREATE TABLE add_drop_logs (
     log_id      BIGSERIAL PRIMARY KEY,
     student_id  TEXT NOT NULL,

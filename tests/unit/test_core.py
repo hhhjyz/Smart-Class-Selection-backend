@@ -32,6 +32,9 @@ def test_require_self_or_privileged() -> None:
 def test_principal_from_headers() -> None:
     p = principal_from_headers("S-1", "student")
     assert p.role is Role.STUDENT
+    assert principal_from_headers("T-1", "TEACHER").role is Role.TEACHER
+    assert principal_from_headers("A-1", "SYS_ADMIN").role is Role.ADMIN
+    assert principal_from_headers("A-2", "ACADEMIC_ADMIN").role is Role.ADMIN
     with pytest.raises(errors.DomainError) as ei:
         principal_from_headers(None, "student")
     assert ei.value.code == errors.ERR_UNAUTHENTICATED
@@ -78,7 +81,7 @@ def test_circuit_breaker_opens_and_resets() -> None:
     cb.record_failure()
     assert cb.is_open is False  # 未达阈值
     cb.record_failure()
-    assert cb.is_open is True   # 第 3 次触发熔断
+    assert cb.is_open is True  # 第 3 次触发熔断
     cb.record_success()
     assert cb.is_open is False  # 成功后复位
 
