@@ -184,7 +184,7 @@ class WaitingRoom(Protocol):
 class InfoServiceClient(Protocol):
     """A 组基础信息服务 info_service（前缀 /api/v1/info）：身份、课程目录、培养方案。
 
-    - 身份 `GET /users/{id}`；课程 `GET /courses/{id}`；
+    - 身份 `GET /data-provision/users/{id}`；课程 `GET /courses/{id}`；
     - 培养方案 `GET /data-provision/training-programs`（Service Token，供 C 组）。
     开课时段/教室不在 A 组——见 :class:`ScheduleServiceClient`。
     """

@@ -3,7 +3,7 @@
 数据流（均为已核对的真实上游契约）：
 - A 组 `GET /api/v1/info/offerings`：开课实体（课/学期/班/容量）——主干；
 - B 组 `GET /api/v1/schedule/entries`：时段 + 教室——按 (course_id, term) 关联补充；
-- A 组 `GET /api/v1/info/users/{id}`：教师姓名（B 组只给 teacher_id）。
+- A 组 `GET /api/v1/info/data-provision/users/{id}`：教师姓名（B 组只给 teacher_id）。
 容量从 A 组开课的 capacity 播种到本地权威库存（已存在则不覆盖）。
 """
 
@@ -31,13 +31,14 @@ async def refresh_offerings(semester: str) -> int:
     catalog = await info.list_offerings(semester)  # A 组开课主干
     if not catalog:
         return 0
-    # B 组排课结果按 course_id 索引（schedule_client 把 course_id 放在 course_code 上）
-    sched_by_course = {o.course_code: o for o in await sched.list_offerings(semester)}
+    schedules = await sched.list_offerings(semester)
+    sched_by_offering = {o.offering_id: o for o in schedules}
+    sched_by_course = {o.course_code: o for o in schedules}
 
     teacher_names: dict[str, str] = {}
     composed: list[Offering] = []
     for entry in catalog:
-        sch = sched_by_course.get(str(entry.course_id))
+        sch = sched_by_offering.get(entry.offering_id) or sched_by_course.get(str(entry.course_id))
         teacher_id = sch.teacher_id if sch else ""
         if teacher_id and teacher_id not in teacher_names:
             try:

@@ -19,15 +19,15 @@ def _install_transport(monkeypatch, handler) -> None:  # type: ignore[no-untyped
 
 @pytest.mark.asyncio
 async def test_info_get_student_maps_user_no_and_full_name(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    # A 组真实 UserResponse：{id, user_no, username, profile:{full_name}}；映射 user_no→学号、full_name→姓名
+    # A 组 data-provision UserDataResponse：映射 user_no→学号、full_name→姓名
     def handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.path == "/api/v1/info/users/S-1"
+        assert req.url.path == "/api/v1/info/data-provision/users/S-1"
         return httpx.Response(
             200,
             json={
                 "code": 0,
                 "message": "success",
-                "data": {"id": 1, "user_no": "S-1", "username": "stu", "profile": {"full_name": "李同学"}},
+                "data": {"user_id": "1", "user_no": "S-1", "username": "stu", "full_name": "李同学"},
             },
         )
 
@@ -139,12 +139,41 @@ async def test_info_sends_bearer_token(monkeypatch) -> None:  # type: ignore[no-
 
 
 @pytest.mark.asyncio
-async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    # B 组真实契约：{code,msg,data:[...]}，/schedule/entries + /classrooms，网关头 X-User-Id/Role
+async def test_info_fetches_service_token_when_not_preconfigured(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    seen = {}
+
     def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/v1/auth/sys/login":
+            assert req.url.host == "auth"
+            assert req.method == "POST"
+            return httpx.Response(200, json={"code": 0, "data": {"service_token": "issued-token", "expires_in": 3600}})
+        seen["auth"] = req.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"user_id": "1", "user_no": "S-1", "username": "stu", "full_name": ""}},
+        )
+
+    _install_transport(monkeypatch, handler)
+    client = HttpInfoServiceClient()
+    client._settings = client._settings.model_copy(
+        update={
+            "auth_service_base_url": "http://auth",
+            "course_selection_service_client_secret": "secret",
+            "info_service_token": "",
+        }
+    )
+    await client.get_student("S-1")
+    assert seen["auth"] == "Bearer issued-token"
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # B 组真实契约：{code,msg,data:[...]}，/schedule/entries + /classrooms，通过 Gateway + service token 调用
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/v1/auth/sys/login":
+            return httpx.Response(200, json={"code": 0, "data": {"service_token": "schedule-token"}})
         if req.url.path == "/api/v1/schedule/entries":
-            assert req.headers.get("X-User-Id") == "course-selection-svc"
-            assert req.headers.get("X-User-Role") == "ADMIN"
+            assert req.headers.get("Authorization") == "Bearer schedule-token"
             return httpx.Response(
                 200,
                 json={
@@ -154,7 +183,10 @@ async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None: 
                         {
                             "id": 1,
                             "semester": "2026-1",
+                            "offering_id": "OFFERING-CS101-01",
                             "course_id": "CS101",
+                            "course_code": "CS101",
+                            "course_name": "软件工程",
                             "teacher_ids": ["T-9001"],
                             "classroom_id": 10,
                             "day_of_week": 1,
@@ -167,7 +199,10 @@ async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None: 
                         {
                             "id": 2,
                             "semester": "2026-1",
+                            "offering_id": "OFFERING-CS101-01",
                             "course_id": "CS101",
+                            "course_code": "CS101",
+                            "course_name": "软件工程",
                             "teacher_ids": ["T-9001"],
                             "classroom_id": 10,
                             "day_of_week": 3,
@@ -181,6 +216,7 @@ async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None: 
                 },
             )
         if req.url.path == "/api/v1/classrooms":
+            assert req.headers.get("Authorization") == "Bearer schedule-token"
             return httpx.Response(
                 200,
                 json={
@@ -203,10 +239,18 @@ async def test_schedule_list_offerings_aggregates_entries(monkeypatch) -> None: 
         return httpx.Response(404, json={})
 
     _install_transport(monkeypatch, handler)
-    offs = await HttpScheduleServiceClient().list_offerings("2026-1")
+    client = HttpScheduleServiceClient()
+    client._settings = client._settings.model_copy(
+        update={
+            "auth_service_base_url": "http://auth",
+            "course_selection_service_client_secret": "secret",
+            "schedule_service_base_url": "http://gateway",
+        }
+    )
+    offs = await client.list_offerings("2026-1")
     assert len(offs) == 1
     o = offs[0]
-    assert o.offering_id == "CS101-2026-1" and o.course_code == "CS101" and o.teacher_id == "T-9001"
+    assert o.offering_id == "OFFERING-CS101-01" and o.course_code == "CS101" and o.teacher_id == "T-9001"
     assert len(o.time_slots) == 2
     assert o.time_slots[0].day == 1 and o.time_slots[0].period == (1, 2) and o.time_slots[0].weeks == "1-16周"
     assert o.time_slots[1].period == (3, 4) and o.time_slots[1].weeks == "1-15周(单)"

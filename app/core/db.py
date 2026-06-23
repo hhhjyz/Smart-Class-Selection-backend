@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from psycopg import AsyncConnection
 from psycopg.adapt import Loader
@@ -49,6 +50,8 @@ async def open_pool() -> None:
         open=False,
     )
     await _pool.open()
+    if settings.auto_migrate:
+        await _run_initial_migration_if_needed()
 
 
 async def close_pool() -> None:
@@ -63,6 +66,17 @@ def _require_pool() -> AsyncConnectionPool:
     if _pool is None:
         raise RuntimeError("连接池未初始化，请先 await open_pool()")
     return _pool
+
+
+async def _run_initial_migration_if_needed() -> None:
+    async with _require_pool().connection() as conn:
+        cur = await conn.execute("SELECT to_regclass('course_selection.study_plans')")
+        row = await cur.fetchone()
+        if row and row[0] is not None:
+            return
+        migration = Path(__file__).resolve().parents[2] / "migrations" / "001_init.sql"
+        await conn.execute(migration.read_text(encoding="utf-8"), prepare=False)
+        await conn.commit()
 
 
 @asynccontextmanager

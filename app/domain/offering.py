@@ -60,16 +60,15 @@ class OfferingCatalogEntry(BaseModel):
 
 
 class StudentProfile(BaseModel):
-    """用户身份（来源 A 组 `GET /api/v1/info/users/{id}` → UserResponse）。
+    """用户身份（来源 A 组 `GET /api/v1/info/data-provision/users/{id}` → UserDataResponse）。
 
-    A 组 UserResponse 实际形如 ``data: {"id": 1, "user_no": "32101", "username": "...",
-    "profile": {"full_name": "张三", ...}}``。映射：student_id ← user_no，name ← profile.full_name。
+    A 组 data-provision 响应映射：student_id ← user_no，name ← full_name。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     student_id: str  # ← A 组 data.user_no（学号/工号）
-    name: str  # ← A 组 data.profile.full_name
+    name: str  # ← A 组 data.full_name
 
 
 class GradeRecord(BaseModel):

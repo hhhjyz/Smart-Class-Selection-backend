@@ -234,7 +234,8 @@ class EnrollmentService:
     ) -> tuple[Offering | None, list[tuple[str, str, datetime | None]]]:
         """读路径：花名册。返回 (开课信息, [(student_id, name, enrolled_at)])。
 
-        姓名经 A 组 `GET /api/v1/users/{id}` 补全（事务外）；A 组不可用时 name 留空降级。
+        姓名经 A 组 `GET /api/v1/info/data-provision/users/{id}` 补全（事务外）；
+        A 组不可用时 name 留空降级。
         """
         async with db.connection() as conn:
             offering = await self._offerings.get(conn, offering_id)

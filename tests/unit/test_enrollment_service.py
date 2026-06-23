@@ -209,5 +209,5 @@ async def test_get_roster_enriches_names_from_a_team() -> None:
     await svc.enroll(_STUDENT, student_id="S-1", offering_id=_OID, stage=Stage.ADD_DROP)
     offering, students = await svc.get_roster(_OID, include_dropped=False)
     assert offering is not None
-    # 姓名经 A 组 GET /api/v1/users/{id} 补全（fake 返回固定姓名）
+    # 姓名经 A 组 data-provision users 接口补全（fake 返回固定姓名）
     assert students[0][0] == "S-1" and students[0][1] == "测试同学"
