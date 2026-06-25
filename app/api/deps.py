@@ -33,6 +33,7 @@ from app.services.reconciler import Reconciler
 from app.services.rule_engine import RuleEngine
 from app.services.study_plan_service import StudyPlanService
 
+
 # --- 请求态：从网关 header 解析当前身份 ---
 # 网关（STSS-gateway）注入 X-User-Id / X-User-Role / X-User-Permissions（见 core/auth.py）。
 async def get_principal(

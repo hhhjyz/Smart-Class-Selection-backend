@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
+from anyio import Path
 from psycopg import AsyncConnection
 from psycopg.adapt import Loader
 from psycopg_pool import AsyncConnectionPool
@@ -74,8 +74,9 @@ async def _run_initial_migration_if_needed() -> None:
         row = await cur.fetchone()
         if row and row[0] is not None:
             return
-        migration = Path(__file__).resolve().parents[2] / "migrations" / "001_init.sql"
-        await conn.execute(migration.read_text(encoding="utf-8"), prepare=False)
+        app_dir = await Path(__file__).resolve()
+        migration = app_dir.parents[2] / "migrations" / "001_init.sql"
+        await conn.execute(await migration.read_text(encoding="utf-8"), prepare=False)
         await conn.commit()
 
 
