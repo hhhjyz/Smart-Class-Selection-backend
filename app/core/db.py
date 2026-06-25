@@ -76,7 +76,7 @@ async def _run_initial_migration_if_needed() -> None:
             return
         app_dir = await Path(__file__).resolve()
         migration = app_dir.parents[2] / "migrations" / "001_init.sql"
-        await conn.execute(await migration.read_text(encoding="utf-8"), prepare=False)
+        await conn.execute(await migration.read_bytes(), prepare=False)
         await conn.commit()
 
 
